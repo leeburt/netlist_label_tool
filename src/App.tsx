@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Settings, Undo, Redo, Save, Upload, MousePointer2, 
   Crop, CircleDot, Network, Trash2, ZoomIn, ZoomOut, RotateCcw, 
@@ -348,6 +349,87 @@ const reactStateToPythonData = (nodes, edges) => {
 
 // --- 2. UI Components ---
 
+const AutocompleteInput = ({ value, onChange, options = [], placeholder, autoFocus, onKeyDown, className, onFocus }: any) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [coords, setCoords] = useState({ left: 0, top: 0, width: 0 });
+  const [isTyping, setIsTyping] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const updatePosition = () => {
+    if (inputRef.current) {
+        const rect = inputRef.current.getBoundingClientRect();
+        setCoords({ 
+            left: rect.left, 
+            top: rect.bottom + window.scrollY, 
+            width: rect.width 
+        });
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+        updatePosition();
+        window.addEventListener('resize', updatePosition);
+        window.addEventListener('scroll', updatePosition, true);
+    }
+    return () => {
+        window.removeEventListener('resize', updatePosition);
+        window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+      const handleGlobalClick = (e) => {
+          if (inputRef.current && !inputRef.current.contains(e.target) && !e.target.closest('.autocomplete-dropdown')) {
+              setIsOpen(false);
+          }
+      };
+      window.addEventListener('mousedown', handleGlobalClick);
+      return () => window.removeEventListener('mousedown', handleGlobalClick);
+  }, []);
+
+  const filtered = useMemo(() => {
+      const distinct = Array.from(new Set(options)).sort();
+      if (!value || !isTyping) return distinct;
+      const lower = value.toLowerCase();
+      return distinct.filter(o => o.toLowerCase().includes(lower));
+  }, [value, options, isTyping]);
+
+  return (
+      <div className="relative w-full">
+          <input
+              ref={inputRef}
+              className={className}
+              value={value}
+              onChange={e => { onChange(e.target.value); setIsOpen(true); setIsTyping(true); }}
+              onFocus={(e) => { setIsOpen(true); setIsTyping(false); if(onFocus) onFocus(e); }}
+              onClick={() => setIsOpen(true)}
+              onKeyDown={e => {
+                  if (e.key === 'Escape') setIsOpen(false);
+                  if (onKeyDown) onKeyDown(e);
+              }}
+              placeholder={placeholder}
+              autoFocus={autoFocus}
+              autoComplete="off"
+          />
+          {isOpen && filtered.length > 0 && (
+              createPortal(
+                  <div className="autocomplete-dropdown fixed z-[99999] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl rounded max-h-60 overflow-y-auto"
+                       style={{ left: coords.left, top: coords.top, width: coords.width }}>
+                      {filtered.map(opt => (
+                          <div key={opt} className="px-3 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer border-b border-slate-100 dark:border-slate-800/50 last:border-0"
+                               onClick={(e) => { e.stopPropagation(); onChange(opt); setIsOpen(false); setIsTyping(false); }}>
+                              {opt}
+                          </div>
+                      ))}
+                  </div>,
+                  document.body
+              )
+          )}
+      </div>
+  );
+};
+
 const Notification = ({ message, onClose }) => {
     useEffect(() => {
         const timer = setTimeout(onClose, 5000);
@@ -413,6 +495,10 @@ const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, s
                                 </div>
                                 <input type="range" min="0" max="1" step="0.1" value={appSettings.defaultBoxOpacity} onChange={e => setAppSettings({...appSettings, defaultBoxOpacity: parseFloat(e.target.value)})} className="w-full accent-blue-600 h-1 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer"/>
                             </div>
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Show Crosshair</label>
+                                <input type="checkbox" checked={appSettings.showCrosshair} onChange={e => setAppSettings({...appSettings, showCrosshair: e.target.checked})} className="accent-blue-600 w-4 h-4 rounded cursor-pointer"/>
+                            </div>
                         </div>
                     </div>
                     {/* Shortcuts Cheat Sheet */}
@@ -425,6 +511,7 @@ const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, s
                                 ['Zoom', 'Mouse Wheel'],
                                 ['Delete Selected', 'Delete'],
                                 ['Delete Network', 'Ctrl + Delete'],
+                                ['Tools (S/R/E/W)', 'Select/Comp/Port/Wire'],
                                 ['Toggle Ports', 'P'],
                                 ['Toggle Labels', 'L'],
                                 ['Hide Text Labels', 'H']
@@ -445,7 +532,7 @@ const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, s
     );
 };
 
-const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, onConfirm, onCancel }) => {
+const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, position, onConfirm, onCancel }) => {
   const [name, setName] = useState(initialName);
   const [inputType, setInputType] = useState('');
   
@@ -480,24 +567,46 @@ const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, onCon
       );
   }
 
+  // Calculate position style if provided
+  const modalStyle = position ? { 
+      position: 'absolute', 
+      left: Math.min(window.innerWidth - 340, position.x + 20), 
+      top: Math.min(window.innerHeight - 300, position.y + 20) 
+  } : {};
+
+  const overlayClass = position ? "fixed inset-0 z-[9999]" : "fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center backdrop-blur-sm";
+
   return (
-    <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center backdrop-blur-sm" onClick={onCancel}>
-      <div className="bg-white dark:bg-slate-900 rounded-lg shadow-2xl w-80 p-5 border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
+    <div className={overlayClass} onClick={onCancel}>
+      <div className="bg-white dark:bg-slate-900 rounded-lg shadow-2xl w-80 p-5 border border-slate-200 dark:border-slate-700" 
+           style={modalStyle}
+           onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-bold mb-4 text-slate-800 dark:text-slate-100">{type === 'comp' ? 'New Component' : 'New Port'}</h3>
         <div className="space-y-4">
             <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">名称 (Name)</label>
-                <input className="w-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 p-2 rounded text-sm focus:border-blue-500 outline-none"
-                    list={type === 'port' ? 'global-port-names' : undefined}
-                    value={name} onChange={e => setName(e.target.value)} placeholder="e.g. M1" autoFocus
-                    onKeyDown={e => e.key === 'Enter' && onConfirm(name, inputType)} />
+                <AutocompleteInput 
+                    className="w-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 p-2 rounded text-sm focus:border-blue-500 outline-none"
+                    options={type === 'port' ? options.portNames : []}
+                    value={name} 
+                    onChange={setName} 
+                    placeholder="e.g. M1" 
+                    autoFocus 
+                    onFocus={(e) => e.target.select()}
+                    onKeyDown={e => e.key === 'Enter' && onConfirm(name, inputType)} 
+                />
             </div>
             <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">类型 (Type)</label>
-                <input className="w-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 p-2 rounded text-sm focus:border-blue-500 outline-none"
-                    list={type === 'comp' ? 'global-comp-types' : undefined}
-                    value={inputType} onChange={e => setInputType(e.target.value)} placeholder="e.g. NMOS"
-                    onKeyDown={e => e.key === 'Enter' && onConfirm(name, inputType)} />
+                <AutocompleteInput 
+                    className="w-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 p-2 rounded text-sm focus:border-blue-500 outline-none"
+                    options={type === 'comp' ? options.compTypes : []}
+                    value={inputType} 
+                    onChange={setInputType} 
+                    placeholder="e.g. NMOS" 
+                    onFocus={(e) => e.target.select()}
+                    onKeyDown={e => e.key === 'Enter' && onConfirm(name, inputType)} 
+                />
             </div>
         </div>
         <div className="flex justify-end gap-2 mt-6">
@@ -531,9 +640,12 @@ const MODE = { VIEW: 'VIEW', ADD_COMP: 'ADD_COMP', ADD_PORT: 'ADD_PORT', CONNECT
 export default function App() {
   // --- Global App Settings & State ---
   const [theme, setTheme] = useState('dark'); // 'light', 'dark'
-  const [appSettings, setAppSettings] = useState({ defaultLineWidth: 2, defaultBoxOpacity: 0.2 });
+  const [appSettings, setAppSettings] = useState({ defaultLineWidth: 2, defaultBoxOpacity: 0.2, showCrosshair: true });
   const [showSettings, setShowSettings] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 }); // Mouse position in world coords
+  const [screenCursor, setScreenCursor] = useState({ x: -100, y: -100 }); // For Crosshair
+  const [hoveredNode, setHoveredNode] = useState(null); // For Tooltip
+
   
   // --- File System State ---
   const [fileList, setFileList] = useState([]); 
@@ -557,9 +669,19 @@ export default function App() {
   const fileInputRef = useRef(null);
   const sidebarRef = useRef(null);
   
-  const [dragState, setDragState] = useState(null); 
-  const [dialog, setDialog] = useState({ isOpen: false, type: '', data: null });
-  const [notification, setNotification] = useState(null);
+  const [dragState, setDragState] = useState<any>(null);
+  const [notification, setNotification] = useState<string | null>(null);
+  
+  const [dialog, setDialog] = useState<{
+    isOpen: boolean;
+    type: string;
+    data: any;
+    options?: { compTypes: string[]; portNames: string[] };
+    initialName?: string;
+    position?: { x: number; y: number };
+    onConfirm?: (name: string, type: string) => void;
+    onCancel?: () => void;
+  }>({ isOpen: false, type: '', data: null });
   
   const [showPorts, setShowPorts] = useState(false);
   const [showLabels, setShowLabels] = useState(true);
@@ -912,23 +1034,36 @@ export default function App() {
         const activeTag = document.activeElement.tagName.toLowerCase();
         if (activeTag === 'input' || activeTag === 'textarea') return;
 
-        if (e.key.toLowerCase() === 'a') switchFile(-1);
-        else if (e.key.toLowerCase() === 'd') switchFile(1);
+        const key = e.key.toLowerCase();
 
-        if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
-        else if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+        // Tool Selection Shortcuts
+        if (key === 's') { setMode(MODE.VIEW); setSelectedIds(new Set()); cancelConnect(); }
+        else if (key === 'r') { setMode(MODE.ADD_COMP); setSelectedIds(new Set()); cancelConnect(); }
+        else if (key === 'e') { setMode(MODE.ADD_PORT); setSelectedIds(new Set()); cancelConnect(); }
+        else if (key === 'w') { setMode(MODE.CONNECT); setSelectedIds(new Set()); cancelConnect(); }
+
+        // Navigation
+        else if (key === 'a') switchFile(-1);
+        else if (key === 'd') switchFile(1);
+
+        // Edit Actions
+        else if (e.ctrlKey && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+        else if (e.ctrlKey && key === 'y') { e.preventDefault(); redo(); }
         else if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelected(e.ctrlKey); }
         else if (e.key === 'Escape') { 
             if (connectStartId) cancelConnect();
+            else if (mode !== MODE.VIEW) setMode(MODE.VIEW); // Esc: Back to View
             else setSelectedIds(new Set());
         }
-        else if (e.key.toLowerCase() === 'p') { setShowPorts(prev => !prev); }
-        else if (e.key.toLowerCase() === 'l') { setShowLabels(prev => !prev); }
-        else if (e.key.toLowerCase() === 'h') { setHideAll(prev => !prev); }
+        
+        // Toggles
+        else if (key === 'p') { setShowPorts(prev => !prev); }
+        else if (key === 'l') { setShowLabels(prev => !prev); }
+        else if (key === 'h') { setHideAll(prev => !prev); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, dialog.isOpen, showSettings, connectStartId, currentFileIndex, fileList, nodes, edges, deleteSelected]);
+  }, [undo, redo, dialog.isOpen, showSettings, connectStartId, currentFileIndex, fileList, nodes, edges, deleteSelected, mode]);
 
   const screenToWorld = useCallback((sx, sy) => {
     if (!containerRef.current) return { x: 0, y: 0 };
@@ -958,7 +1093,7 @@ export default function App() {
         }
     }
 
-    if (!hitResizeHandle && !hitNode && !hitEdge && (mode === MODE.VIEW || mode === MODE.ADD_PORT)) {
+    if (!hitResizeHandle && !hitNode && !hitEdge && (mode === MODE.VIEW || mode === MODE.ADD_PORT || mode === MODE.ADD_COMP)) {
         for (let i = nodes.length - 1; i >= 0; i--) {
             const n = nodes[i];
             if (n.type === 'component' && wx >= n.position.x && wx <= n.position.x + n.width && wy >= n.position.y && wy <= n.position.y + n.height) { hitNode = n; break; }
@@ -1002,7 +1137,14 @@ export default function App() {
             setDragState({ type: 'PAN', startX: e.clientX, startY: e.clientY, startTrans: { ...transform } });
         }
     } else if (mode === MODE.ADD_COMP) {
-        setDragState({ type: 'DRAW', startX: wx, startY: wy, currX: wx, currY: wy });
+        if (hitNode) {
+            const newSel = new Set([hitNode.id]);
+            setSelectedIds(newSel);
+            saveHistory();
+            setDragState({ type: 'NODE', startX: e.clientX, startY: e.clientY, nodeIds: [...newSel] });
+        } else {
+            setDragState({ type: 'DRAW', startX: wx, startY: wy, currX: wx, currY: wy });
+        }
     } else if (mode === MODE.CONNECT) {
         if (hitNode && (hitNode.type === 'port' || hitNode.type === 'net_node')) {
             if (connectStartId) { handleConnect(connectStartId, hitNode.id); setConnectStartId(hitNode.id); } 
@@ -1021,14 +1163,54 @@ export default function App() {
             setDragState({ type: 'PAN', startX: e.clientX, startY: e.clientY, startTrans: { ...transform } });
         }
     } else if (mode === MODE.ADD_PORT) {
-        const context = (hitNode && hitNode.type === 'component') ? { type: 'int', parent: hitNode } : { type: 'ext' };
-        setDialog({ isOpen: true, type: 'port', data: { x: wx, y: wy, context }, options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames } }); 
+        if (hitNode && (hitNode.type === 'port' || hitNode.type === 'net_node')) {
+            const newSel = new Set([hitNode.id]);
+            setSelectedIds(newSel);
+            saveHistory();
+            setDragState({ type: 'NODE', startX: e.clientX, startY: e.clientY, nodeIds: [...newSel] });
+        } else {
+            const context = (hitNode && hitNode.type === 'component') ? { type: 'int', parent: hitNode } : { type: 'ext' };
+            setDialog({ 
+                isOpen: true, 
+                type: 'port', 
+                data: { x: wx, y: wy, context }, 
+                options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames },
+                position: { x: e.clientX, y: e.clientY } // Pass screen coords
+            }); 
+        }
     }
   };
 
   const handleMouseMove = (e) => {
     const { x: wx, y: wy } = screenToWorld(e.clientX, e.clientY);
-    setCursorPos({ x: Math.round(wx), y: Math.round(wy) }); // Update cursor pos live
+    setCursorPos({ x: Math.round(wx), y: Math.round(wy) }); 
+    setScreenCursor({ x: e.clientX, y: e.clientY });
+
+    // --- Hover Detection ---
+    if (!dragState && !dialog.isOpen) {
+        let hover = null;
+        const hoverThreshold = 10 / transform.k;
+        
+        // Check Ports & Net Nodes
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            if ((nodes[i].type === 'port' || nodes[i].type === 'net_node') && 
+                Math.hypot(nodes[i].position.x - wx, nodes[i].position.y - wy) < hoverThreshold) { 
+                hover = nodes[i]; break; 
+            }
+        }
+        // Check Components
+        if (!hover) {
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                const n = nodes[i];
+                if (n.type === 'component' && wx >= n.position.x && wx <= n.position.x + n.width && wy >= n.position.y && wy <= n.position.y + n.height) { 
+                    hover = n; break; 
+                }
+            }
+        }
+        setHoveredNode(hover);
+    } else {
+        setHoveredNode(null);
+    }
 
     if (dragState?.type === 'CONNECTING') { setDragState(prev => ({ ...prev, currX: wx, currY: wy })); return; }
     if (!dragState) return;
@@ -1066,10 +1248,18 @@ export default function App() {
     }
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e) => {
     if (dragState?.type === 'DRAW') {
         const w = Math.abs(dragState.currX - dragState.startX), h = Math.abs(dragState.currY - dragState.startY);
-        if (w > 10 && h > 10) setDialog({ isOpen: true, type: 'comp', data: { x: Math.min(dragState.startX, dragState.currX), y: Math.min(dragState.startY, dragState.currY), w, h }, options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames } });
+        if (w > 10 && h > 10) {
+            setDialog({ 
+                isOpen: true, 
+                type: 'comp', 
+                data: { x: Math.min(dragState.startX, dragState.currX), y: Math.min(dragState.startY, dragState.currY), w, h }, 
+                options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames },
+                position: { x: e.clientX, y: e.clientY } // Pass screen coords
+            });
+        }
     }
     if (dragState?.type !== 'CONNECTING') setDragState(null);
   };
@@ -1150,16 +1340,21 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans overflow-hidden transition-colors duration-200">
         {notification && <Notification message={notification} onClose={() => setNotification(null)} />}
-        <ModalDialog isOpen={dialog.isOpen} type={dialog.type} data={dialog.data} options={dialog.options} initialName={dialog.initialName} onConfirm={dialog.onConfirm || handleDialogConfirm} onCancel={dialog.onCancel || (() => setDialog({ isOpen: false }))} />
+        <ModalDialog isOpen={dialog.isOpen} type={dialog.type} data={dialog.data} options={dialog.options} initialName={dialog.initialName} position={dialog.position} onConfirm={dialog.onConfirm || handleDialogConfirm} onCancel={dialog.onCancel || (() => setDialog({ isOpen: false }))} />
         <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} appSettings={appSettings} setAppSettings={setAppSettings} theme={theme} setTheme={setTheme} />
         
-        {/* Global Datalists for Modal & Inspector - Defined ONLY once here */}
-        <datalist id="global-comp-types">
-            {uniqueComponentTypes.map(v => <option key={v} value={v} />)}
-        </datalist>
-        <datalist id="global-port-names">
-            {uniquePortNames.map(v => <option key={v} value={v} />)}
-        </datalist>
+        {/* Hover Tooltip */}
+        {hoveredNode && !dragState && !dialog.isOpen && (
+            <div className="fixed z-[100] pointer-events-none bg-slate-900/90 backdrop-blur text-white text-xs p-2 rounded border border-slate-700 shadow-xl"
+                 style={{ left: screenCursor.x + 15, top: screenCursor.y + 15 }}>
+                <div className="font-bold text-blue-300 mb-0.5">{hoveredNode.type === 'component' ? 'Component' : (hoveredNode.type === 'port' ? 'Port' : 'Net Node')}</div>
+                <div className="font-mono">{hoveredNode.data?.label || hoveredNode.id}</div>
+                {hoveredNode.data?.type && <div className="text-slate-400">{hoveredNode.data.type}</div>}
+                {hoveredNode.data?.netName && <div className="text-green-400 mt-1">Net: {hoveredNode.data.netName}</div>}
+            </div>
+        )}
+
+        {/* Global Datalists removed - replaced by AutocompleteInput */}
 
         {/* --- Top Bar --- */}
         <div className="h-14 bg-slate-950 border-b border-slate-800 flex items-center px-4 justify-between shrink-0">
@@ -1254,9 +1449,14 @@ export default function App() {
                              singleSelected.type === 'component' ? (
                                  <div className="space-y-4 animate-in fade-in slide-in-from-right-5 duration-200">
                                      <div><label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Name</label><input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600" value={singleSelected.data.label} onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }} /></div>
-                                     <div><label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Type</label><input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600" 
-                                        list="global-comp-types"
-                                        value={singleSelected.data.type} onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} />
+                                     <div><label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Type</label>
+                                        <AutocompleteInput 
+                                            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600" 
+                                            options={uniqueComponentTypes}
+                                            value={singleSelected.data.type} 
+                                            onFocus={(e) => e.target.select()}
+                                            onChange={v => { saveHistory(); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
+                                        />
                                      </div>
                                      
                                      <div className="pt-2 border-t border-slate-800">
@@ -1267,9 +1467,13 @@ export default function App() {
                                                 return (
                                                  <div key={p.id} className="flex flex-col gap-1 mb-2">
                                                      <div className="flex gap-2">
-                                                         <input className={`flex-1 bg-slate-800 border rounded px-1.5 py-0.5 text-xs text-slate-300 outline-none focus:border-blue-500 ${hasConflict ? 'border-red-500/50 bg-red-900/10 text-red-300' : 'border-slate-700'}`} 
-                                                            list="global-port-names"
-                                                            value={p.data.label} onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, label: v } } : n)); }}/>
+                                                         <AutocompleteInput 
+                                                            className={`flex-1 bg-slate-800 border rounded px-1.5 py-0.5 text-xs text-slate-300 outline-none focus:border-blue-500 ${hasConflict ? 'border-red-500/50 bg-red-900/10 text-red-300' : 'border-slate-700'}`} 
+                                                            options={uniquePortNames}
+                                                            onFocus={(e) => e.target.select()}
+                                                            value={p.data.label} 
+                                                            onChange={v => { saveHistory(); setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
+                                                         />
                                                          <input className="w-16 bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none focus:border-blue-500 placeholder-slate-600" value={p.data.type||''} placeholder="Type" onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, type: v } } : n)); }}/>
                                                      </div>
                                                      {hasConflict && <div className="text-[9px] text-red-400 flex items-center gap-1"><AlertTriangle size={10}/> Net Conflict Detected</div>}
@@ -1315,14 +1519,38 @@ export default function App() {
                              ) : (
                                  // Wire / Net / Port Selection
                                  <div className="space-y-4 animate-in fade-in slide-in-from-right-5 duration-200">
-                                     <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-800">
-                                         <Network size={16} className="text-slate-400"/>
-                                         <span className="text-xs font-bold text-slate-300">
-                                            {singleSelected.type === 'net_edge' ? 'Wire Segment' : (singleSelected.type === 'port' ? 'Port' : 'Net Node')}
-                                         </span>
-                                     </div>
-                                     
-                                     {/* Net Name Input with Propagation */}
+                                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-800">
+                                        <Network size={16} className="text-slate-400"/>
+                                        <span className="text-xs font-bold text-slate-300">
+                                           {singleSelected.type === 'net_edge' ? 'Wire Segment' : (singleSelected.type === 'port' ? 'Port' : 'Net Node')}
+                                        </span>
+                                    </div>
+                                    
+                                    {/* Port Name & Type Editing */}
+                                    {singleSelected.type === 'port' && (
+                                        <div className="mb-4 pb-4 border-b border-slate-800 space-y-3">
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Name</label>
+                                                <AutocompleteInput 
+                                                    className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600"
+                                                    options={uniquePortNames}
+                                                    value={singleSelected.data.label} 
+                                                    onFocus={(e) => e.target.select()}
+                                                    onChange={v => { saveHistory(); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Type</label>
+                                                <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600" 
+                                                    value={singleSelected.data.type || ''} 
+                                                    placeholder="e.g. IN/OUT"
+                                                    onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Net Name Input with Propagation */}
                                      <div>
                                          <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Net Name</label>
                                          <div className="flex gap-2">
@@ -1398,14 +1626,22 @@ export default function App() {
                     }} 
                 />
 
+                {/* Crosshair Overlay */}
+                {appSettings.showCrosshair && (
+                    <div className="fixed inset-0 pointer-events-none z-[100] overflow-hidden">
+                        <div className="absolute bg-blue-500/30" style={{ left: screenCursor.x, top: 0, bottom: 0, width: 1 }}></div>
+                        <div className="absolute bg-blue-500/30" style={{ top: screenCursor.y, left: 0, right: 0, height: 1 }}></div>
+                    </div>
+                )}
+
                 {/* Floating Toolbar (Left Vertical) */}
                 <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-1 bg-white/90 dark:bg-slate-800/90 backdrop-blur-sm p-1.5 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 z-50 ring-1 ring-black/5 dark:ring-white/5">
                     <button onClick={fitView} className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 rounded-md transition-colors" title="Fit Screen (Center)"><Maximize size={20} /></button>
                     <div className="h-px w-full bg-slate-200 dark:bg-slate-700 my-1"></div>
                     {[
-                        { m: MODE.VIEW, icon: MousePointer2, label: 'Select (V)' },
-                        { m: MODE.ADD_COMP, icon: Crop, label: 'Component (C)' },
-                        { m: MODE.ADD_PORT, icon: CircleDot, label: 'Port (P)' },
+                        { m: MODE.VIEW, icon: MousePointer2, label: 'Select (S)' },
+                        { m: MODE.ADD_COMP, icon: Crop, label: 'Component (R)' },
+                        { m: MODE.ADD_PORT, icon: CircleDot, label: 'Port (E)' },
                         { m: MODE.CONNECT, icon: Network, label: 'Connect (W)' },
                     ].map(t => (
                         <button key={t.m} onClick={() => { setMode(t.m); setSelectedIds(new Set()); cancelConnect(); }}

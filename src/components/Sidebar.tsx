@@ -1,6 +1,6 @@
 import React from 'react';
 import useStore from '../store';
-import { Upload, FileJson, MousePointer2, BoxSelect, Circle, Network, Save, RotateCcw, RotateCw, Trash2, Edit3 } from 'lucide-react';
+import { Upload, FileJson, BoxSelect, Circle, Network, Save, RotateCcw, RotateCw, Trash2, Edit3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const Sidebar = () => {
@@ -50,10 +50,6 @@ const Sidebar = () => {
   // Selection Info
   const selectedNode = nodes.find(n => n.selected);
   const selectedEdge = edges.find(e => e.selected);
-  
-  // Logic to determine if "network" is selected via junction/edge
-  let selectedNetworkJunction = null;
-  if (selectedNode?.type === 'junction') selectedNetworkJunction = selectedNode;
   
   const getTip = () => {
       switch(mode) {

@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { Handle, Position, NodeProps, NodeResizer } from 'reactflow';
 
 // --- Styles based on Python main.py ---

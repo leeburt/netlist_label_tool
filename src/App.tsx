@@ -1,12 +1,12 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { 
-  Settings, Undo, Redo, Save, Upload, MousePointer2, 
-  Crop, CircleDot, Network, Trash2, ZoomIn, ZoomOut, RotateCcw, 
-  Image as ImageIcon, Plus, Minus, Eye, EyeOff, Type, Droplets, AlertTriangle,
-  FolderOpen, ChevronLeft, ChevronRight, Search, FileText, CheckCircle2,
-  HelpCircle, X, AlignJustify, MoreVertical, Layers, Info, ChevronDown, ChevronUp, Grid,
-  Moon, Sun, GripHorizontal, Monitor, Maximize, Move
+  Settings, Undo, Redo, Save, MousePointer2, 
+  Crop, CircleDot, Network, Trash2, 
+  Plus, Eye, EyeOff, AlertTriangle,
+  FolderOpen, ChevronLeft, ChevronRight, Search, CheckCircle2,
+  X, Layers, Info,
+  Moon, Sun, GripHorizontal, Monitor, Maximize
 } from 'lucide-react';
 
 // --- 0. Utility Functions ---
@@ -18,7 +18,7 @@ const DEFAULT_TYPES = ['NMOS', 'PMOS', 'RES', 'CAP', 'IND', 'VSOURCE', 'ISOURCE'
 const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS', 'MINUS', 'A', 'B', 'Y'];
 
 // Color Generation
-    const stringToColor = (str) => {
+    const stringToColor = (str: any) => {
       if (!str) return '#999999';
       const s = String(str);
       let hash = 0;
@@ -30,7 +30,7 @@ const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS
       return `hsl(${h}, 85%, var(--net-color-lightness, 40%))`; 
     };
     
-    const getComponentColor = (type, opacity = 0.6) => {
+    const getComponentColor = (type: any, opacity = 0.6) => {
         if (!type) return `rgba(59, 130, 246, ${opacity})`; 
         const s = String(type).toUpperCase();
         let hash = 0;
@@ -41,7 +41,7 @@ const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS
         return `hsla(${h}, 60%, 92%, ${opacity})`; 
     };
     
-    const getComponentStrokeColor = (type) => {
+    const getComponentStrokeColor = (type: any) => {
         if (!type) return '#2563eb';
         const s = String(type).toUpperCase();
         let hash = 0;
@@ -53,17 +53,17 @@ const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS
     }
 
 // --- 1. Data Processing (Python <-> React) ---
-const pythonDataToReactState = (jsonStr) => {
+const pythonDataToReactState = (jsonStr: string) => {
   try {
     const data = JSON.parse(jsonStr);
-    let nodes = [];
-    let edges = [];
-    let mergeReport = new Set();
+    let nodes: any[] = [];
+    let edges: any[] = [];
+    let mergeReport = new Set<string>();
     
     // Check for New Format (viz_core.py compatible)
     if (data.components || data.external_ports) {
         // 1. Parse Components
-        Object.entries(data.components || {}).forEach(([compName, compInfo]) => {
+        Object.entries(data.components || {}).forEach(([compName, compInfo]: [string, any]) => {
              // Handle box: [minX, minY, maxX, maxY]
              const [x1, y1, x2, y2] = compInfo.box;
              const w = Math.abs(x2 - x1);
@@ -81,7 +81,7 @@ const pythonDataToReactState = (jsonStr) => {
                  data: { label: compName, type: compInfo.type || '' }
              });
              
-             (compInfo.ports || []).forEach(p => {
+             (compInfo.ports || []).forEach((p: any) => {
                  const pId = getId();
                  nodes.push({
                      id: pId,
@@ -94,7 +94,7 @@ const pythonDataToReactState = (jsonStr) => {
         });
         
         // 2. Parse External Ports
-        Object.entries(data.external_ports || {}).forEach(([portName, portInfo]) => {
+        Object.entries(data.external_ports || {}).forEach(([portName, portInfo]: [string, any]) => {
              const pId = getId();
              nodes.push({
                  id: pId,
@@ -105,12 +105,12 @@ const pythonDataToReactState = (jsonStr) => {
         });
         
         // 3. Parse Connections (Star Topology for now)
-        (data.connections || []).forEach((conn, index) => {
+        (data.connections || []).forEach((conn: any, index: number) => {
             const netName = `net_${index}`;
-            const validNodes = [];
+            const validNodes: any[] = [];
             
             // Find React Node IDs for each connected item
-            (conn.nodes || []).forEach(item => {
+            (conn.nodes || []).forEach((item: any) => {
                 let foundNode = null;
                 if (item.component === 'external') {
                     foundNode = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.label === item.port);
@@ -156,7 +156,7 @@ const pythonDataToReactState = (jsonStr) => {
     }
 
     // --- Fallback: Old Format (Keep existing logic) ---
-    const findNearestNodeInList = (list, x, y) => {
+    const findNearestNodeInList = (list: any[], x: number, y: number) => {
         for (const node of list) {
             if ((node.type === 'port' || node.type === 'net_node') && 
                 Math.abs(node.position.x - x) <= SNAPPING_THRESHOLD && 
@@ -168,7 +168,7 @@ const pythonDataToReactState = (jsonStr) => {
     };
 
     // 1. Parse Components & Ports
-    (data.ckt_netlist || []).forEach(comp => {
+    (data.ckt_netlist || []).forEach((comp: any) => {
         const { top_left, bottom_right } = comp.bbox;
         const x = top_left[0];
         const y = top_left[1];
@@ -188,7 +188,7 @@ const pythonDataToReactState = (jsonStr) => {
             }
         });
 
-        Object.entries(comp.port || {}).forEach(([portName, portInfo]) => {
+        Object.entries(comp.port || {}).forEach(([portName, portInfo]: [string, any]) => {
             const center = portInfo.center;
             const pId = getId();
             nodes.push({
@@ -204,7 +204,7 @@ const pythonDataToReactState = (jsonStr) => {
     // 2. Parse Connections with Auto-Merge Logic
     const netRenames = new Map(); 
 
-    const getEffectiveNetName = (name) => {
+    const getEffectiveNetName = (name: string) => {
         let curr = name;
         while (netRenames.has(curr)) {
             curr = netRenames.get(curr);
@@ -212,8 +212,8 @@ const pythonDataToReactState = (jsonStr) => {
         return curr;
     };
 
-    Object.entries(data.connection || {}).forEach(([rawNetName, netInfo]) => {
-        (netInfo.pixels || []).forEach(seg => {
+    Object.entries(data.connection || {}).forEach(([rawNetName, netInfo]: [string, any]) => {
+        (netInfo.pixels || []).forEach((seg: any) => {
             const [p1, p2] = seg;
             let currentNetName = getEffectiveNetName(rawNetName);
 
@@ -272,11 +272,11 @@ const pythonDataToReactState = (jsonStr) => {
   }
 };
 
-const reactStateToPythonData = (nodes, edges) => {
+const reactStateToPythonData = (nodes: any[]) => {
     // Export to New Format (viz_core.py compatible)
-    const components = {};
-    const external_ports = {};
-    const connections = []; 
+    const components: any = {};
+    const external_ports: any = {};
+    const connections: any[] = [];  
     const nets = new Map(); // netName -> Set of {component, port}
     
     // 1. Components
@@ -328,10 +328,10 @@ const reactStateToPythonData = (nodes, edges) => {
     });
     
     // 3. Connections
-    nets.forEach((nodeList, netName) => {
-        const uniqueNodes = [];
+    nets.forEach((nodeList) => {
+        const uniqueNodes: any[] = [];
         const seen = new Set();
-        nodeList.forEach(item => {
+        nodeList.forEach((item: any) => {
             const key = `${item.component}:${item.port}`;
             if (!seen.has(key)) {
                 seen.add(key);
@@ -379,7 +379,7 @@ const AutocompleteInput = ({ value, onChange, options = [], placeholder, autoFoc
   }, [isOpen]);
 
   useEffect(() => {
-      const handleGlobalClick = (e) => {
+      const handleGlobalClick = (e: any) => {
           if (inputRef.current && !inputRef.current.contains(e.target) && !e.target.closest('.autocomplete-dropdown')) {
               setIsOpen(false);
           }
@@ -392,7 +392,7 @@ const AutocompleteInput = ({ value, onChange, options = [], placeholder, autoFoc
       const distinct = Array.from(new Set(options)).sort();
       if (!value || !isTyping) return distinct;
       const lower = value.toLowerCase();
-      return distinct.filter(o => o.toLowerCase().includes(lower));
+      return distinct.filter((o: any) => o.toLowerCase().includes(lower));
   }, [value, options, isTyping]);
 
   return (
@@ -416,7 +416,7 @@ const AutocompleteInput = ({ value, onChange, options = [], placeholder, autoFoc
               createPortal(
                   <div className="autocomplete-dropdown fixed z-[99999] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl rounded max-h-60 overflow-y-auto"
                        style={{ left: coords.left, top: coords.top, width: coords.width }}>
-                      {filtered.map(opt => (
+                      {filtered.map((opt: any) => (
                           <div key={opt} className="px-3 py-2 text-xs text-slate-700 dark:text-slate-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer border-b border-slate-100 dark:border-slate-800/50 last:border-0"
                                onClick={(e) => { e.stopPropagation(); onChange(opt); setIsOpen(false); setIsTyping(false); }}>
                               {opt}
@@ -430,7 +430,7 @@ const AutocompleteInput = ({ value, onChange, options = [], placeholder, autoFoc
   );
 };
 
-const Notification = ({ message, onClose }) => {
+const Notification = ({ message, onClose }: any) => {
     useEffect(() => {
         const timer = setTimeout(onClose, 5000);
         return () => clearTimeout(timer);
@@ -448,7 +448,7 @@ const Notification = ({ message, onClose }) => {
     );
 };
 
-const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, setTheme }) => {
+const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, setTheme }: any) => {
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black/60 z-[9999] flex items-center justify-center backdrop-blur-sm" onClick={onClose}>
@@ -532,7 +532,7 @@ const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, s
     );
 };
 
-const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, position, onConfirm, onCancel }) => {
+const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, position, onConfirm, onCancel }: any) => {
   const [name, setName] = useState(initialName);
   const [inputType, setInputType] = useState('');
   
@@ -569,7 +569,7 @@ const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, posit
 
   // Calculate position style if provided
   const modalStyle = position ? { 
-      position: 'absolute', 
+      position: 'absolute' as const,  
       left: Math.min(window.innerWidth - 340, position.x + 20), 
       top: Math.min(window.innerHeight - 300, position.y + 20) 
   } : {};
@@ -592,8 +592,8 @@ const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, posit
                     onChange={setName} 
                     placeholder="e.g. M1" 
                     autoFocus 
-                    onFocus={(e) => e.target.select()}
-                    onKeyDown={e => e.key === 'Enter' && onConfirm(name, inputType)} 
+                    onFocus={(e: any) => e.target.select()}
+                    onKeyDown={(e: any) => e.key === 'Enter' && onConfirm(name, inputType)} 
                 />
             </div>
             <div>
@@ -604,8 +604,8 @@ const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, posit
                     value={inputType} 
                     onChange={setInputType} 
                     placeholder="e.g. NMOS" 
-                    onFocus={(e) => e.target.select()}
-                    onKeyDown={e => e.key === 'Enter' && onConfirm(name, inputType)} 
+                    onFocus={(e: any) => e.target.select()}
+                    onKeyDown={(e: any) => e.key === 'Enter' && onConfirm(name, inputType)} 
                 />
             </div>
         </div>
@@ -618,7 +618,7 @@ const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, posit
   );
 };
 
-const ConnectionSegment = ({ from, to, netName, isSelected, isRelated, isTemp, isConflict, width = 2 }) => {
+const ConnectionSegment = ({ from, to, netName, isSelected, isRelated, isTemp, isConflict, width = 2 }: any) => {
   if (!from || !to) return null;
   const baseColor = isTemp ? '#666' : (isConflict ? '#ef4444' : stringToColor(netName));
   const strokeDash = isTemp || isConflict ? "5,5" : undefined;
@@ -647,19 +647,19 @@ const RightSidebar = ({
     hiddenNodeIds,
     setHiddenNodeIds,
     onSelectIds
-}) => {
+}: any) => {
     const [newItemName, setNewItemName] = useState('');
     const [newItemType, setNewItemType] = useState('component'); // 'component' | 'port'
     const [searchTerm, setSearchTerm] = useState('');
 
-    const toggleTypeVisibility = (type) => {
+    const toggleTypeVisibility = (type: any) => {
         const newHidden = new Set(hiddenTypes);
         if (newHidden.has(type)) newHidden.delete(type);
         else newHidden.add(type);
         setHiddenTypes(newHidden);
     };
 
-    const toggleNodeVisibility = (id) => {
+    const toggleNodeVisibility = (id: any) => {
         const newHidden = new Set(hiddenNodeIds);
         if (newHidden.has(id)) newHidden.delete(id);
         else newHidden.add(id);
@@ -673,7 +673,7 @@ const RightSidebar = ({
         setNewItemName('');
     };
 
-    const filteredNodes = nodes.filter(n => {
+    const filteredNodes = nodes.filter((n: any) => {
         if (n.type === 'net_node') return false;
         const label = n.data.label || '';
         const type = n.data.type || '';
@@ -683,8 +683,8 @@ const RightSidebar = ({
     });
 
     const groupedNodes = useMemo(() => {
-        const groups = {};
-        filteredNodes.forEach(n => {
+        const groups: any = {};
+        filteredNodes.forEach((n: any) => {
             const t = n.data.type || 'Uncategorized';
             if (!groups[t]) groups[t] = [];
             groups[t].push(n);
@@ -702,10 +702,10 @@ const RightSidebar = ({
 
     const [isResizing1, setIsResizing1] = useState(false);
     const [isResizing2, setIsResizing2] = useState(false);
-    const sidebarRef = useRef(null);
+    const sidebarRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const handleMouseMove = (e) => {
+        const handleMouseMove = (e: any) => {
             if ((!isResizing1 && !isResizing2) || !sidebarRef.current) return;
             const rect = sidebarRef.current.getBoundingClientRect();
             // We need to account for the fixed header (~90px estimated)
@@ -717,8 +717,7 @@ const RightSidebar = ({
             // But calculating that dynamically is complex.
             // Simpler: use the whole sidebar height for calculation.
             
-            const relY = e.clientY - rect.top;
-            const pct = (relY / rect.height) * 100;
+            // const relY = e.clientY - rect.top;
             
             if (isResizing1) {
                 // Dragging first handle (between Comp Types and Ports)
@@ -799,7 +798,7 @@ const RightSidebar = ({
                     <span className="text-[9px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 rounded-full transition-colors">{componentTypes.length}</span>
                  </div>
                  <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-2 space-y-1">
-                    {componentTypes.map(t => (
+                    {componentTypes.map((t: any) => (
                         <div key={t} className="flex items-center justify-between group hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded px-1 py-0.5 transition-colors">
                             <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                                 <div className="w-2.5 h-2.5 rounded-full shadow-sm" style={{backgroundColor: getComponentColor(t)}} />
@@ -826,7 +825,7 @@ const RightSidebar = ({
                     <span className="text-[9px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 rounded-full transition-colors">{portNames.length}</span>
                  </div>
                  <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-2 space-y-1">
-                    {portNames.map(t => (
+                    {portNames.map((t: any) => (
                         <div key={t} className="flex items-center justify-between group hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded px-1 py-0.5 transition-colors">
                             <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                                 <div className="w-2.5 h-2.5 rounded-full shadow-sm" style={{backgroundColor: stringToColor(t)}} />
@@ -862,14 +861,14 @@ const RightSidebar = ({
                  </div>
                  
                  <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-4">
-                     {Object.entries(groupedNodes).map(([type, list]) => (
+                     {Object.entries(groupedNodes).map(([type, list]: any) => (
                          <div key={type}>
                              <div className="text-[10px] font-bold text-slate-500 uppercase mb-1 sticky top-0 bg-slate-100 dark:bg-slate-900 py-1 z-10 flex items-center gap-2 border-b border-slate-200 dark:border-slate-800/50 shadow-sm transition-colors">
                                  <div className="w-2 h-2 rounded-full" style={{backgroundColor: getComponentColor(type)}} />
                                  {type} ({list.length})
                              </div>
                              <div className="space-y-0.5 pl-2 border-l border-slate-200 dark:border-slate-800 ml-1 transition-colors">
-                                 {list.map((n, idx) => (
+                                 {list.map((n: any, idx: number) => (
                                      <div key={n.id} className="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 group text-xs text-slate-600 dark:text-slate-400 transition-colors">
                                          <div className="flex items-center gap-2 cursor-pointer truncate" onClick={() => onSelectIds(n.id)}>
                                              <input 
@@ -903,8 +902,8 @@ export default function App() {
   const [bgImage, setBgImage] = useState(null);
   const [mode, setMode] = useState(MODE.VIEW);
   
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [connectStartId, setConnectStartId] = useState(null); 
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [connectStartId, setConnectStartId] = useState<string | null>(null);  
   
   const [past, setPast] = useState<any[]>([]);
   const [future, setFuture] = useState<any[]>([]);
@@ -930,26 +929,26 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 }); // Mouse position in world coords
   const [screenCursor, setScreenCursor] = useState({ x: -100, y: -100 }); // For Crosshair
-  const [hoveredNode, setHoveredNode] = useState(null); // For Tooltip
+  const [hoveredNode, setHoveredNode] = useState<any>(null); // For Tooltip
 
   
   // --- File System State ---
-  const [fileList, setFileList] = useState([]); 
+  const [fileList, setFileList] = useState<any[]>([]); 
   const [currentFileIndex, setCurrentFileIndex] = useState(-1);
   const [searchQuery, setSearchQuery] = useState('');
   
   const [transform, setTransform] = useState({ x: 0, y: 0, k: 1 });
-  const containerRef = useRef(null);
-  const fileInputRef = useRef(null);
-  const sidebarRef = useRef(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   
   const [dragState, setDragState] = useState<any>(null);
   const [notification, setNotification] = useState<string | null>(null);
   
   const [dialog, setDialog] = useState<{
     isOpen: boolean;
-    type: string;
-    data: any;
+    type?: string;
+    data?: any;
     options?: { compTypes: string[]; portNames: string[] };
     initialName?: string;
     position?: { x: number; y: number };
@@ -987,7 +986,7 @@ export default function App() {
       const root = window.document.documentElement;
       console.log('Theme Effect Triggered:', theme);
       
-      const applyTheme = (t) => {
+          const applyTheme = (t: any) => {
           console.log('Applying theme:', t);
           root.classList.remove('light', 'dark');
           
@@ -1014,7 +1013,7 @@ export default function App() {
 
   // --- Sidebar Resizing Effect ---
   useEffect(() => {
-      const handleMouseMove = (e) => {
+      const handleMouseMove = (e: any) => {
           if (!isResizingSidebar || !sidebarRef.current) return;
           const sidebarRect = sidebarRef.current.getBoundingClientRect();
           // Calculate percentage based on mouse Y relative to sidebar top
@@ -1036,8 +1035,8 @@ export default function App() {
   }, [isResizingSidebar]);
 
   // --- File Management Logic ---
-  const handleFileUpload = (e) => {
-    const files = Array.from(e.target.files);
+  const handleFileUpload = (e: any) => {
+    const files = Array.from(e.target.files as any[]);
     const images = files.filter(f => f.type.startsWith('image/'));
     const jsons = files.filter(f => f.name.endsWith('.json'));
 
@@ -1082,6 +1081,7 @@ export default function App() {
       
       const img = new Image();
       img.onload = () => {
+          if (!containerRef.current) return;
           const rect = containerRef.current.getBoundingClientRect();
           const k = Math.min((rect.width - 40) / img.width, (rect.height - 40) / img.height, 1);
           setTransform({ x: Math.floor((rect.width - img.width * k) / 2), y: Math.floor((rect.height - img.height * k) / 2), k });
@@ -1089,13 +1089,14 @@ export default function App() {
       img.src = bgImage;
   }, [bgImage]);
 
-  const loadFile = (index, sourceList = fileList) => {
+  const loadFile = (index: number, sourceList = fileList) => {
     if (index < 0 || index >= sourceList.length) return;
     const fileObj = sourceList[index];
 
     const reader = new FileReader();
     reader.onload = (e) => {
-        setBgImage(e.target.result);
+        if (!e.target) return;
+        setBgImage(e.target.result as any);
         if (!fileObj.data) {
             const img = new Image();
             img.onload = () => {
@@ -1105,7 +1106,7 @@ export default function App() {
                     setTransform({ x: Math.floor((rect.width - img.width * k) / 2), y: Math.floor((rect.height - img.height * k) / 2), k });
                 }
             };
-            img.src = e.target.result;
+            img.src = e.target.result as string;
         }
     };
     reader.readAsDataURL(fileObj.imgFile);
@@ -1117,7 +1118,8 @@ export default function App() {
     } else if (fileObj.jsonFile) {
         const jReader = new FileReader();
         jReader.onload = (e) => {
-            const res = pythonDataToReactState(e.target.result);
+            if (!e.target) return;
+            const res = pythonDataToReactState(e.target.result as string);
             if (res) {
                 setNodes(res.nodes);
                 setEdges(res.edges);
@@ -1139,7 +1141,7 @@ export default function App() {
     setConnectStartId(null);
   };
 
-  const switchFile = (direction) => {
+  const switchFile = (direction: number) => {
       if (fileList.length === 0) return;
       saveCurrentStateToMemory();
       let nextIdx = currentFileIndex + direction;
@@ -1185,7 +1187,7 @@ export default function App() {
 
   const netLabels = useMemo(() => {
       if (!showLabels || hideAll) return [];
-      const groups = {}; 
+      const groups: any = {}; 
       edges.forEach(e => {
           if (!e.data?.netName) return;
           const s = nodes.find(n => n.id === e.source);
@@ -1196,14 +1198,14 @@ export default function App() {
           }
       });
 
-      return Object.entries(groups).map(([name, segments]) => {
+      return Object.entries(groups).map(([name, segments]: any) => {
           if (segments.length === 0) return null;
           
           // Find segment with max length
           let bestSeg = segments[0];
           let maxLen = -1;
           
-          segments.forEach(seg => {
+          segments.forEach((seg: any) => {
               const len = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
               if (len > maxLen) {
                   maxLen = len;
@@ -1254,9 +1256,9 @@ export default function App() {
     setSelectedIds(new Set());
   }, [future, nodes, edges]);
 
-  const getConnectedEdges = useCallback((startEdgeId) => {
+  const getConnectedEdges = useCallback((startEdgeId: string) => {
       const adj = new Map();
-      const getNodeIds = (id) => { if(!adj.has(id)) adj.set(id, []); return adj.get(id); };
+      const getNodeIds = (id: any) => { if(!adj.has(id)) adj.set(id, []); return adj.get(id); };
       
       edges.forEach(e => {
           getNodeIds(e.source).push({ type: 'edge', id: e.id, neighbor: e.target });
@@ -1273,7 +1275,7 @@ export default function App() {
       while(queue.length > 0) {
           const currNodeId = queue.shift();
           const neighbors = adj.get(currNodeId) || [];
-          neighbors.forEach(item => {
+          neighbors.forEach((item: any) => {
               if (item.type === 'edge') {
                   if (!connectedEdgeIds.has(item.id)) {
                       connectedEdgeIds.add(item.id);
@@ -1321,9 +1323,9 @@ export default function App() {
   }, [selectedIds, nodes, edges, saveHistory, getConnectedEdges]);
 
   useEffect(() => {
-    const handleKeyDown = (e) => {
+    const handleKeyDown = (e: any) => {
         if (dialog.isOpen || showSettings) return; 
-        const activeTag = document.activeElement.tagName.toLowerCase();
+        const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
         if (activeTag === 'input' || activeTag === 'textarea') return;
 
         const key = e.key.toLowerCase();
@@ -1357,7 +1359,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo, dialog.isOpen, showSettings, connectStartId, currentFileIndex, fileList, nodes, edges, deleteSelected, mode]);
 
-  const screenToWorld = useCallback((sx, sy) => {
+  const screenToWorld = useCallback((sx: number, sy: number) => {
     if (!containerRef.current) return { x: 0, y: 0 };
     const rect = containerRef.current.getBoundingClientRect();
     return { x: (sx - rect.left - transform.x) / transform.k, y: (sy - rect.top - transform.y) / transform.k };
@@ -1365,7 +1367,7 @@ export default function App() {
 
   const cancelConnect = useCallback(() => { setConnectStartId(null); setDragState(null); }, []);
 
-  const handleMouseDown = (e) => {
+  const handleMouseDown = (e: any) => {
     if (e.button === 2) { if (connectStartId) cancelConnect(); return; }
     const { x: wx, y: wy } = screenToWorld(e.clientX, e.clientY);
     let hitNode = null, hitEdge = null, hitResizeHandle = null;
@@ -1473,7 +1475,7 @@ export default function App() {
     }
   };
 
-  const handleMouseMove = (e) => {
+  const handleMouseMove = (e: any) => {
     const { x: wx, y: wy } = screenToWorld(e.clientX, e.clientY);
     setCursorPos({ x: Math.round(wx), y: Math.round(wy) }); 
     setScreenCursor({ x: e.clientX, y: e.clientY });
@@ -1504,14 +1506,14 @@ export default function App() {
         setHoveredNode(null);
     }
 
-    if (dragState?.type === 'CONNECTING') { setDragState(prev => ({ ...prev, currX: wx, currY: wy })); return; }
+    if (dragState?.type === 'CONNECTING') { setDragState((prev: any) => ({ ...prev, currX: wx, currY: wy })); return; }
     if (!dragState) return;
 
     if (dragState.type === 'PAN') {
         setTransform({ ...transform, x: dragState.startTrans.x + e.clientX - dragState.startX, y: dragState.startTrans.y + e.clientY - dragState.startY });
     } else if (dragState.type === 'NODE') {
         const dx = e.movementX / transform.k, dy = e.movementY / transform.k;
-        setNodes(prev => {
+        setNodes((prev: any[]) => {
             const moving = new Set(dragState.nodeIds);
             const parentIds = new Set(prev.filter(n => moving.has(n.id) && n.type === 'component').map(n => n.id));
             prev.filter(n => parentIds.has(n.parentId)).forEach(n => moving.add(n.id));
@@ -1533,14 +1535,14 @@ export default function App() {
         });
     } else if (dragState.type === 'RESIZE') {
         const dx = (e.clientX - dragState.startX) / transform.k, dy = (e.clientY - dragState.startY) / transform.k;
-        setNodes(prev => prev.map(n => n.id === dragState.node.id ? { ...n, width: Math.max(20, dragState.node.width + dx), height: Math.max(20, dragState.node.height + dy) } : n));
-        setDragState(prev => ({ ...prev, startX: e.clientX, startY: e.clientY, node: { ...dragState.node, width: Math.max(20, dragState.node.width + dx), height: Math.max(20, dragState.node.height + dy) } }));
+        setNodes((prev: any[]) => prev.map(n => n.id === dragState.node.id ? { ...n, width: Math.max(20, dragState.node.width + dx), height: Math.max(20, dragState.node.height + dy) } : n));
+        setDragState((prev: any) => ({ ...prev, startX: e.clientX, startY: e.clientY, node: { ...dragState.node, width: Math.max(20, dragState.node.width + dx), height: Math.max(20, dragState.node.height + dy) } }));
     } else if (dragState.type === 'DRAW') {
-        setDragState(prev => ({ ...prev, currX: wx, currY: wy }));
+        setDragState((prev: any) => ({ ...prev, currX: wx, currY: wy }));
     }
   };
 
-  const handleMouseUp = (e) => {
+  const handleMouseUp = (e: any) => {
     if (dragState?.type === 'DRAW') {
         const w = Math.abs(dragState.currX - dragState.startX), h = Math.abs(dragState.currY - dragState.startY);
         if (w > 10 && h > 10) {
@@ -1556,7 +1558,7 @@ export default function App() {
     if (dragState?.type !== 'CONNECTING') setDragState(null);
   };
 
-  const handleConnect = (sourceId, targetId) => {
+  const handleConnect = (sourceId: string, targetId: string) => {
       if (sourceId === targetId) return;
 
       const netA = nodes.find(n=>n.id===sourceId)?.data?.netName || edges.find(e=>e.source===sourceId||e.target===sourceId)?.data?.netName;
@@ -1576,23 +1578,23 @@ export default function App() {
       createConnection(sourceId, targetId, netA, netB);
   };
 
-  const createConnection = (sourceId, targetId, netA, netB) => {
+  const createConnection = (sourceId: any, targetId: any, netA: any, netB: any) => {
       saveHistory();
       const finalNet = netA || netB || `net${Math.floor(Math.random()*10000)}`;
       setEdges(prev => [...prev, { id: `edge_${getId()}`, source: sourceId, target: targetId, type: 'net_edge', data: { netName: finalNet } }]);
-      setNodes(prev => prev.map(n => (n.id === sourceId || n.id === targetId) && !n.data.netName ? { ...n, data: { ...n.data, netName: finalNet } } : n));
+            setNodes((prev: any[]) => prev.map(n => (n.id === sourceId || n.id === targetId) && !n.data.netName ? { ...n, data: { ...n.data, netName: finalNet } } : n));
   };
 
-  const handleMergeConfirm = (netA, netB, sourceId, targetId) => {
+  const handleMergeConfirm = (netA: any, netB: any, sourceId: any, targetId: any) => {
       saveHistory();
       const newNetName = netA;
-      setNodes(prev => prev.map(n => n.data.netName === netB ? { ...n, data: { ...n.data, netName: newNetName } } : n));
+      setNodes((prev: any[]) => prev.map(n => n.data.netName === netB ? { ...n, data: { ...n.data, netName: newNetName } } : n));
       setEdges(prev => prev.map(e => e.data.netName === netB ? { ...e, data: { ...e.data, netName: newNetName } } : e));
       setEdges(prev => [...prev, { id: `edge_${getId()}`, source: sourceId, target: targetId, type: 'net_edge', data: { netName: newNetName } }]);
       setDialog({ isOpen: false });
   };
 
-  const propagateNetRename = (startEdgeId, newNetName) => {
+  const propagateNetRename = (startEdgeId: any, newNetName: any) => {
       const connected = getConnectedEdges(startEdgeId);
       const affectedNodes = new Set();
       edges.forEach(e => {
@@ -1603,23 +1605,23 @@ export default function App() {
       });
 
       setEdges(prev => prev.map(e => connected.has(e.id) ? { ...e, data: { ...e.data, netName: newNetName } } : e));
-      setNodes(prev => prev.map(n => affectedNodes.has(n.id) && (n.type === 'port' || n.type === 'net_node') ? { ...n, data: { ...n.data, netName: newNetName } } : n));
+      setNodes((prev: any[]) => prev.map(n => affectedNodes.has(n.id) && (n.type === 'port' || n.type === 'net_node') ? { ...n, data: { ...n.data, netName: newNetName } } : n));
   };
 
-  const handleDialogConfirm = (name, type) => {
+  const handleDialogConfirm = (name: any, type: any) => {
       saveHistory();
       if (dialog.type === 'comp') {
           const { x, y, w, h } = dialog.data;
-          setNodes(prev => [...prev, { id: `comp_${name}`, type: 'component', position: { x, y }, width: w, height: h, data: { label: name, type } }]);
+          setNodes((prev: any[]) => [...prev, { id: `comp_${name}`, type: 'component', position: { x, y }, width: w, height: h, data: { label: name, type } }]);
       } else if (dialog.type === 'port') {
           const { x, y, context } = dialog.data;
-          setNodes(prev => [...prev, { id: getId(), type: 'port', position: { x, y }, parentId: context.type === 'int' ? context.parent.id : null, data: { label: name, isExternal: context.type === 'ext', compName: context.type === 'int' ? context.parent.data.label : 'ext' } }]);
+          setNodes((prev: any[]) => [...prev, { id: getId(), type: 'port', position: { x, y }, parentId: context.type === 'int' ? context.parent.id : null, data: { label: name, isExternal: context.type === 'ext', compName: context.type === 'int' ? context.parent.data.label : 'ext' } }]);
       }
       setDialog({ isOpen: false, type: '', data: null });
   };
 
   const downloadCurrentJson = () => {
-      const blob = new Blob([reactStateToPythonData(nodes, edges)], {type:'application/json'});
+      const blob = new Blob([reactStateToPythonData(nodes)], {type:'application/json'});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = (fileList[currentFileIndex]?.name.replace(/\.[^/.]+$/, "") || "circuit") + ".json";
@@ -1686,7 +1688,7 @@ export default function App() {
                     </div>
                     
                     <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-2 transition-colors">
-                        <button onClick={() => fileInputRef.current.click()} className="w-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-1.5 rounded border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium transition-colors">
+                        <button onClick={() => fileInputRef.current?.click()} className="w-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-1.5 rounded border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium transition-colors">
                             <Plus size={14}/> Add Files
                         </button>
                         <input ref={fileInputRef} type="file" multiple accept="image/*,.json" className="hidden" onChange={handleFileUpload} />
@@ -1699,7 +1701,7 @@ export default function App() {
                     <div className="flex-1 overflow-y-auto custom-scrollbar">
                         {filteredFiles.length === 0 ? <div className="p-4 text-center text-slate-400 dark:text-slate-600 text-[10px] italic">No files loaded</div> : (
                             <div className="flex flex-col">
-                                {filteredFiles.map((f, i) => {
+                                {filteredFiles.map((f) => {
                                     const realIdx = fileList.indexOf(f);
                                     const isActive = realIdx === currentFileIndex;
                                     return (
@@ -1740,14 +1742,14 @@ export default function App() {
                          {singleSelected ? (
                              singleSelected.type === 'component' ? (
                                  <div className="space-y-4 animate-in fade-in slide-in-from-right-5 duration-200">
-                                     <div><label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Name</label><input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={singleSelected.data.label} onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }} /></div>
+                                     <div><label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Name</label><input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={singleSelected.data.label} onChange={e => { saveHistory(); const v=e.target.value; setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }} /></div>
                                      <div><label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Type</label>
                                         <AutocompleteInput 
                                             className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" 
                                             options={uniqueComponentTypes}
                                             value={singleSelected.data.type} 
-                                            onFocus={(e) => e.target.select()}
-                                            onChange={v => { saveHistory(); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
+                                            onFocus={(e: any) => e.target.select()}
+                                            onChange={(v: any) => { saveHistory(); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
                                         />
                                      </div>
                                      
@@ -1762,11 +1764,11 @@ export default function App() {
                                                          <AutocompleteInput 
                                                             className={`flex-1 bg-slate-800 border rounded px-1.5 py-0.5 text-xs text-slate-300 outline-none focus:border-blue-500 ${hasConflict ? 'border-red-500/50 bg-red-900/10 text-red-300' : 'border-slate-700'}`} 
                                                             options={uniquePortNames}
-                                                            onFocus={(e) => e.target.select()}
+                                                            onFocus={(e: any) => e.target.select()}
                                                             value={p.data.label} 
-                                                            onChange={v => { saveHistory(); setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
+                                                            onChange={(v: any) => { saveHistory(); setNodes((prev: any[]) => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
                                                          />
-                                                         <input className="w-16 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={p.data.type||''} placeholder="Type" onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, type: v } } : n)); }}/>
+                                                         <input className="w-16 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={p.data.type||''} placeholder="Type" onChange={e => { saveHistory(); const v=e.target.value; setNodes((prev: any[]) => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, type: v } } : n)); }}/>
                                                      </div>
                                                      {hasConflict && <div className="text-[9px] text-red-400 flex items-center gap-1"><AlertTriangle size={10}/> Net Conflict Detected</div>}
                                                  </div>
@@ -1783,25 +1785,25 @@ export default function App() {
                                                  <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">X</label>
                                                  <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.position.x)} 
-                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, x: v } } : n)); }} />
+                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, x: v } } : n)); }} />
                                              </div>
                                              <div>
                                                  <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Y</label>
                                                  <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.position.y)} 
-                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, y: v } } : n)); }} />
+                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, y: v } } : n)); }} />
                                              </div>
                                              <div>
                                                  <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">W</label>
                                                  <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.width)} 
-                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, width: v } : n)); }} />
+                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, width: v } : n)); }} />
                                              </div>
                                              <div>
                                                  <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">H</label>
                                                  <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.height)} 
-                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, height: v } : n)); }} />
+                                                     onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, height: v } : n)); }} />
                                              </div>
                                          </div>
                                      </div>
@@ -1827,8 +1829,8 @@ export default function App() {
                                                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600"
                                                     options={uniquePortNames}
                                                     value={singleSelected.data.label} 
-                                                    onFocus={(e) => e.target.select()}
-                                                    onChange={v => { saveHistory(); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
+                                                    onFocus={(e: any) => e.target.select()}
+                                                    onChange={(v: any) => { saveHistory(); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
                                                 />
                                             </div>
                                             <div>
@@ -1836,7 +1838,7 @@ export default function App() {
                                                 <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" 
                                                     value={singleSelected.data.type || ''} 
                                                     placeholder="e.g. IN/OUT"
-                                                    onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
+                                                    onChange={e => { saveHistory(); const v=e.target.value; setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
                                                 />
                                             </div>
                                         </div>
@@ -1854,7 +1856,7 @@ export default function App() {
                                                     if (singleSelected.type === 'net_edge') {
                                                         propagateNetRename(singleSelected.id, v);
                                                     } else {
-                                                        setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, netName: v } } : n));
+                                                        setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, netName: v } } : n));
                                                     }
                                                 }} 
                                                 placeholder="No Net"
@@ -1876,13 +1878,13 @@ export default function App() {
                                                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">X</label>
                                                      <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                          type="number" value={Math.round(singleSelected.position.x)} 
-                                                         onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, x: v } } : n)); }} />
+                                                         onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, x: v } } : n)); }} />
                                                  </div>
                                                  <div>
                                                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Y</label>
                                                      <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                          type="number" value={Math.round(singleSelected.position.y)} 
-                                                         onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, y: v } } : n)); }} />
+                                                         onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, y: v } } : n)); }} />
                                                  </div>
                                              </div>
                                          </div>
@@ -1949,6 +1951,7 @@ export default function App() {
                 <div ref={containerRef} className="flex-1 relative cursor-crosshair overflow-hidden" 
                     onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}
                     onWheel={e => {
+                        if (!containerRef.current) return;
                         const rect = containerRef.current.getBoundingClientRect();
                         const d = e.deltaY > 0 ? -0.1 : 0.1;
                         const k = Math.max(0.1, Math.min(5, transform.k + d));
@@ -2013,7 +2016,7 @@ export default function App() {
                             }
                         })}
                         
-                        {!hideAll && showLabels && netLabels.map((l, i) => (
+                        {!hideAll && showLabels && netLabels.map((l: any, i) => (
                             <div key={i} className="absolute z-30 px-1.5 py-0.5 bg-white/95 border rounded text-[10px] font-mono shadow-sm cursor-pointer hover:scale-110 transition-transform select-none hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700"
                                 style={{ left: l.x, top: l.y, transform: 'translate(-50%,-50%)', borderColor: stringToColor(l.name), color: stringToColor(l.name) }}
                                 onClick={(e) => { 
@@ -2052,13 +2055,13 @@ export default function App() {
                 nodes={nodes}
                 componentTypes={uniqueComponentTypes}
                 portNames={uniquePortNames}
-                onAddType={(t) => setExtraTypes(prev => [...prev, t])}
-                onAddPort={(p) => setExtraPorts(prev => [...prev, p])}
+                onAddType={(t: string) => setExtraTypes(prev => [...prev, t])}
+                onAddPort={(p: string) => setExtraPorts(prev => [...prev, p])}
                 hiddenTypes={hiddenTypes}
                 setHiddenTypes={setHiddenTypes}
                 hiddenNodeIds={hiddenNodeIds}
                 setHiddenNodeIds={setHiddenNodeIds}
-                onSelectIds={(id) => {
+                onSelectIds={(id: any) => {
                     setSelectedIds(new Set([id]));
                     setMode(MODE.VIEW);
                 }}

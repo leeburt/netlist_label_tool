@@ -1,20 +1,17 @@
-import React, { memo } from 'react';
-import { BaseEdge, EdgeLabelRenderer, EdgeProps, getStraightPath, useStore } from 'reactflow';
+import { memo } from 'react';
+import { BaseEdge, EdgeProps, getStraightPath } from 'reactflow';
 
 export const CustomEdge = memo(({
-  id,
   sourceX,
   sourceY,
   targetX,
   targetY,
-  sourcePosition,
-  targetPosition,
   style = {},
   markerEnd,
   selected,
   data
 }: EdgeProps) => {
-  const [edgePath, labelX, labelY] = getStraightPath({
+  const [edgePath] = getStraightPath({
     sourceX,
     sourceY,
     targetX,

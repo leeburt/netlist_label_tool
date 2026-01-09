@@ -1,16 +1,12 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import ReactFlow, { 
     Background, 
     Controls, 
     MiniMap, 
-    useNodesState, 
-    useEdgesState,
     ReactFlowProvider,
     useReactFlow,
     Node,
-    Edge,
     Panel,
-    NodeDragHandler,
     OnSelectionChangeParams
 } from 'reactflow';
 import useStore from '../store';
@@ -33,7 +29,7 @@ const CanvasInner = () => {
     const { 
         nodes, edges, mode, imgSrc, imgSize, connectStartNodeId,
         onNodesChange, onEdgesChange, onConnect,
-        addComponent, addPort, setMode, updateHighlighting, setConnectStartNodeId
+        addComponent, addPort, updateHighlighting, setConnectStartNodeId
     } = useStore();
 
     const reactFlowInstance = useReactFlow();
@@ -191,6 +187,7 @@ const CanvasInner = () => {
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 onSelectionChange={onSelectionChange}
+                // @ts-ignore
                 onPaneMouseDown={onPaneMouseDown}
                 onPaneMouseMove={onPaneMouseMove}
                 onPaneMouseUp={onPaneMouseUp}

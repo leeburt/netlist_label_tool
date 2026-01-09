@@ -5,13 +5,11 @@ import {
   EdgeChange,
   Node,
   NodeChange,
-  addEdge,
   OnNodesChange,
   OnEdgesChange,
   OnConnect,
   applyNodeChanges,
   applyEdgeChanges,
-  MarkerType,
 } from 'reactflow';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -428,9 +426,6 @@ const useStore = create<AppState>((set, get) => ({
       
       const { nodes, edges } = get();
       
-      const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
-      const selectedEdgeIds = new Set(selectedEdges.map(e => e.id));
-      
       const nodesToHighlight = new Set<string>();
       const edgesToHighlight = new Set<string>();
 
@@ -547,11 +542,9 @@ const useStore = create<AppState>((set, get) => ({
             });
 
             (comp.ports || []).forEach((p: any) => {
-                 const pName = name || `P${nodes.length}`;
                  const portSize = 10;
-                 const radius = portSize / 2;
-                 const px = p.coord[0] - x - radius;
-                 const py = p.coord[1] - y - radius;
+                 const px = p.coord[0] - x - (portSize / 2);
+                 const py = p.coord[1] - y - (portSize / 2);
                  newNodes.push({
                      id: uuidv4(),
                      type: 'port',
@@ -705,8 +698,8 @@ const useStore = create<AppState>((set, get) => ({
                      const node = nodes.find(n => n.id === otherId);
                if (node && node.type === 'port') {
                    // Calculate center coordinate for export
-                   const pSize = Number(node.style?.width) || 10;
-                   const radius = pSize / 2;
+                   // const pSize = Number(node.style?.width) || 10;
+                   // const radius = pSize / 2;
                    
                    if (node.parentNode) {
                        const parent = nodes.find(p => p.id === node.parentNode);

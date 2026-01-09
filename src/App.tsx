@@ -18,39 +18,39 @@ const DEFAULT_TYPES = ['NMOS', 'PMOS', 'RES', 'CAP', 'IND', 'VSOURCE', 'ISOURCE'
 const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS', 'MINUS', 'A', 'B', 'Y'];
 
 // Color Generation
-const stringToColor = (str) => {
-  if (!str) return '#999999';
-  const s = String(str);
-  let hash = 0;
-  for (let i = 0; i < s.length; i++) {
-    hash = s.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const goldenRatio = 0.618033988749895;
-  const h = (Math.abs(hash) * goldenRatio % 1) * 360;
-  return `hsl(${h}, 85%, 40%)`; 
-};
-
-const getComponentColor = (type, opacity = 0.6) => {
-    if (!type) return `rgba(59, 130, 246, ${opacity})`; 
-    const s = String(type).toUpperCase();
-    let hash = 0;
-    for (let i = 0; i < s.length; i++) {
+    const stringToColor = (str) => {
+      if (!str) return '#999999';
+      const s = String(str);
+      let hash = 0;
+      for (let i = 0; i < s.length; i++) {
         hash = s.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      const goldenRatio = 0.618033988749895;
+      const h = (Math.abs(hash) * goldenRatio % 1) * 360;
+      return `hsl(${h}, 85%, var(--net-color-lightness, 40%))`; 
+    };
+    
+    const getComponentColor = (type, opacity = 0.6) => {
+        if (!type) return `rgba(59, 130, 246, ${opacity})`; 
+        const s = String(type).toUpperCase();
+        let hash = 0;
+        for (let i = 0; i < s.length; i++) {
+            hash = s.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const h = Math.abs(hash) % 360;
+        return `hsla(${h}, 60%, 92%, ${opacity})`; 
+    };
+    
+    const getComponentStrokeColor = (type) => {
+        if (!type) return '#2563eb';
+        const s = String(type).toUpperCase();
+        let hash = 0;
+        for (let i = 0; i < s.length; i++) {
+            hash = s.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const h = Math.abs(hash) % 360;
+        return `hsl(${h}, 60%, 40%)`;
     }
-    const h = Math.abs(hash) % 360;
-    return `hsla(${h}, 60%, 92%, ${opacity})`; 
-};
-
-const getComponentStrokeColor = (type) => {
-    if (!type) return '#2563eb';
-    const s = String(type).toUpperCase();
-    let hash = 0;
-    for (let i = 0; i < s.length; i++) {
-        hash = s.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const h = Math.abs(hash) % 360;
-    return `hsl(${h}, 60%, 40%)`;
-}
 
 // --- 1. Data Processing (Python <-> React) ---
 const pythonDataToReactState = (jsonStr) => {
@@ -761,26 +761,26 @@ const RightSidebar = ({
 
 
     return (
-        <div ref={sidebarRef} className="w-72 bg-slate-900 border-l border-slate-800 flex flex-col shrink-0 z-20 shadow-xl overflow-hidden select-none">
+        <div ref={sidebarRef} className="w-72 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col shrink-0 z-20 shadow-xl overflow-hidden select-none transition-colors">
              {/* Fixed Header Section */}
-             <div className="shrink-0 border-b border-slate-800">
-                <div className="p-3 bg-slate-950/50 text-slate-200 font-bold text-xs uppercase tracking-wider flex items-center gap-2">
-                    <Layers size={14} className="text-blue-500"/>
+             <div className="shrink-0 border-b border-slate-200 dark:border-slate-800">
+                <div className="p-3 bg-slate-50 dark:bg-slate-950/50 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition-colors">
+                    <Layers size={14} className="text-blue-600 dark:text-blue-500"/>
                     <span>Tags & Filter</span>
                 </div>
                 {/* Add Tag Inputs */}
                 <div className="p-4 space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">Add New Tag</label>
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase transition-colors">Add New Tag</label>
                     <div className="flex gap-1">
                         <input 
-                           className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 outline-none focus:border-blue-500" 
+                           className="flex-1 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-xs text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 transition-colors" 
                            placeholder="Name..." 
                            value={newItemName}
                            onChange={e => setNewItemName(e.target.value)}
                            onKeyDown={e => e.key === 'Enter' && handleAdd()}
                         />
                         <select 
-                           className="bg-slate-800 border border-slate-700 rounded px-1 py-1 text-[10px] text-slate-400 outline-none"
+                           className="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1 py-1 text-[10px] text-slate-600 dark:text-slate-400 outline-none transition-colors"
                            value={newItemType}
                            onChange={e => setNewItemType(e.target.value)}
                         >
@@ -794,18 +794,18 @@ const RightSidebar = ({
 
              {/* Resizable Section 1: Component Types */}
              <div style={{ height: `${split1}%` }} className="flex flex-col min-h-[50px]">
-                 <div className="px-4 py-2 bg-slate-900/50 sticky top-0 z-10 flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">Component Types</label>
-                    <span className="text-[9px] bg-slate-800 text-slate-400 px-1.5 rounded-full">{componentTypes.length}</span>
+                 <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900/50 sticky top-0 z-10 flex items-center justify-between transition-colors">
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-500 uppercase">Component Types</label>
+                    <span className="text-[9px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 rounded-full transition-colors">{componentTypes.length}</span>
                  </div>
                  <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-2 space-y-1">
                     {componentTypes.map(t => (
-                        <div key={t} className="flex items-center justify-between group hover:bg-slate-800/50 rounded px-1 py-0.5">
-                            <div className="flex items-center gap-2 text-xs text-slate-300">
+                        <div key={t} className="flex items-center justify-between group hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded px-1 py-0.5 transition-colors">
+                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                                 <div className="w-2.5 h-2.5 rounded-full shadow-sm" style={{backgroundColor: getComponentColor(t)}} />
                                 <span>{t}</span>
                             </div>
-                            <button onClick={() => toggleTypeVisibility(t)} className={`p-0.5 rounded hover:bg-slate-700 ${hiddenTypes.has(t) ? 'text-slate-600' : 'text-blue-400'}`}>
+                            <button onClick={() => toggleTypeVisibility(t)} className={`p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 ${hiddenTypes.has(t) ? 'text-slate-400 dark:text-slate-600' : 'text-blue-600 dark:text-blue-400'}`}>
                                 {hiddenTypes.has(t) ? <EyeOff size={12}/> : <Eye size={12}/>}
                             </button>
                         </div>
@@ -815,24 +815,24 @@ const RightSidebar = ({
 
              {/* Resizer 1 */}
              <div 
-                className="h-1 bg-slate-950 border-y border-slate-800 cursor-row-resize hover:bg-blue-600 transition-colors shrink-0"
+                className="h-1 bg-slate-200 dark:bg-slate-950 border-y border-slate-300 dark:border-slate-800 cursor-row-resize hover:bg-blue-500 dark:hover:bg-blue-600 transition-colors shrink-0"
                 onMouseDown={() => setIsResizing1(true)}
              />
 
              {/* Resizable Section 2: Port Names */}
              <div style={{ height: `${split2}%` }} className="flex flex-col min-h-[50px]">
-                 <div className="px-4 py-2 bg-slate-900/50 sticky top-0 z-10 flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">Port Names</label>
-                    <span className="text-[9px] bg-slate-800 text-slate-400 px-1.5 rounded-full">{portNames.length}</span>
+                 <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900/50 sticky top-0 z-10 flex items-center justify-between transition-colors">
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-500 uppercase">Port Names</label>
+                    <span className="text-[9px] bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 rounded-full transition-colors">{portNames.length}</span>
                  </div>
                  <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-2 space-y-1">
                     {portNames.map(t => (
-                        <div key={t} className="flex items-center justify-between group hover:bg-slate-800/50 rounded px-1 py-0.5">
-                            <div className="flex items-center gap-2 text-xs text-slate-300">
+                        <div key={t} className="flex items-center justify-between group hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded px-1 py-0.5 transition-colors">
+                            <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                                 <div className="w-2.5 h-2.5 rounded-full shadow-sm" style={{backgroundColor: stringToColor(t)}} />
                                 <span>{t}</span>
                             </div>
-                            <button onClick={() => toggleTypeVisibility(t)} className={`p-0.5 rounded hover:bg-slate-700 ${hiddenTypes.has(t) ? 'text-slate-600' : 'text-blue-400'}`}>
+                            <button onClick={() => toggleTypeVisibility(t)} className={`p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 ${hiddenTypes.has(t) ? 'text-slate-400 dark:text-slate-600' : 'text-blue-600 dark:text-blue-400'}`}>
                                 {hiddenTypes.has(t) ? <EyeOff size={12}/> : <Eye size={12}/>}
                             </button>
                         </div>
@@ -842,19 +842,19 @@ const RightSidebar = ({
 
              {/* Resizer 2 */}
              <div 
-                className="h-1 bg-slate-950 border-y border-slate-800 cursor-row-resize hover:bg-blue-600 transition-colors shrink-0"
+                className="h-1 bg-slate-200 dark:bg-slate-950 border-y border-slate-300 dark:border-slate-800 cursor-row-resize hover:bg-blue-500 dark:hover:bg-blue-600 transition-colors shrink-0"
                 onMouseDown={() => setIsResizing2(true)}
              />
 
              {/* Resizable Section 3: Instance List (Takes remaining space) */}
-             <div className="flex-1 flex flex-col min-h-0 bg-slate-900/30">
-                 <div className="p-2 border-b border-slate-800 shrink-0">
+             <div className="flex-1 flex flex-col min-h-0 bg-slate-50/50 dark:bg-slate-900/30 transition-colors">
+                 <div className="p-2 border-b border-slate-200 dark:border-slate-800 shrink-0">
                      <div className="relative">
-                         <Search size={12} className="absolute left-2.5 top-2 text-slate-500"/>
+                         <Search size={12} className="absolute left-2.5 top-2 text-slate-400 dark:text-slate-500"/>
                          <input 
                             type="text" 
                             placeholder="Filter instances..." 
-                            className="w-full bg-slate-950 border border-slate-800 rounded py-1.5 pl-7 pr-2 text-[11px] text-slate-300 focus:border-blue-500 outline-none" 
+                            className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded py-1.5 pl-7 pr-2 text-[11px] text-slate-900 dark:text-slate-300 focus:border-blue-500 outline-none transition-colors" 
                             value={searchTerm} 
                             onChange={e => setSearchTerm(e.target.value)}
                          />
@@ -864,19 +864,19 @@ const RightSidebar = ({
                  <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-4">
                      {Object.entries(groupedNodes).map(([type, list]) => (
                          <div key={type}>
-                             <div className="text-[10px] font-bold text-slate-500 uppercase mb-1 sticky top-0 bg-slate-900 py-1 z-10 flex items-center gap-2 border-b border-slate-800/50 shadow-sm">
+                             <div className="text-[10px] font-bold text-slate-500 uppercase mb-1 sticky top-0 bg-slate-100 dark:bg-slate-900 py-1 z-10 flex items-center gap-2 border-b border-slate-200 dark:border-slate-800/50 shadow-sm transition-colors">
                                  <div className="w-2 h-2 rounded-full" style={{backgroundColor: getComponentColor(type)}} />
                                  {type} ({list.length})
                              </div>
-                             <div className="space-y-0.5 pl-2 border-l border-slate-800 ml-1">
+                             <div className="space-y-0.5 pl-2 border-l border-slate-200 dark:border-slate-800 ml-1 transition-colors">
                                  {list.map((n, idx) => (
-                                     <div key={n.id} className="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-800 group text-xs text-slate-400">
+                                     <div key={n.id} className="flex items-center justify-between py-1 px-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 group text-xs text-slate-600 dark:text-slate-400 transition-colors">
                                          <div className="flex items-center gap-2 cursor-pointer truncate" onClick={() => onSelectIds(n.id)}>
                                              <input 
-                                                type="checkbox" 
-                                                className="accent-blue-600 rounded cursor-pointer" 
-                                                checked={!hiddenNodeIds.has(n.id)} 
-                                                onChange={(e) => { e.stopPropagation(); toggleNodeVisibility(n.id); }}
+                                                 type="checkbox" 
+                                                 className="accent-blue-600 rounded cursor-pointer" 
+                                                 checked={!hiddenNodeIds.has(n.id)} 
+                                                 onChange={(e) => { e.stopPropagation(); toggleNodeVisibility(n.id); }}
                                              />
                                              <span className={hiddenNodeIds.has(n.id) ? 'opacity-50 line-through' : ''}>
                                                  {n.data.label || `${type} #${idx+1}`}
@@ -887,7 +887,7 @@ const RightSidebar = ({
                              </div>
                          </div>
                      ))}
-                     {filteredNodes.length === 0 && <div className="text-center text-[10px] text-slate-600 mt-4 italic">No matching instances</div>}
+                     {filteredNodes.length === 0 && <div className="text-center text-[10px] text-slate-400 dark:text-slate-600 mt-4 italic transition-colors">No matching instances</div>}
                  </div>
              </div>
         </div>
@@ -925,7 +925,7 @@ export default function App() {
       return hidden;
   }, [nodes, hiddenNodeIds, hiddenTypes]);
 
-  const [theme, setTheme] = useState('dark'); // 'light', 'dark'
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'system'); // 'light', 'dark', 'system'
   const [appSettings, setAppSettings] = useState({ defaultLineWidth: 2, defaultBoxOpacity: 0.2, showCrosshair: true });
   const [showSettings, setShowSettings] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 }); // Mouse position in world coords
@@ -985,12 +985,30 @@ export default function App() {
   // --- Theme Effect ---
   useEffect(() => {
       const root = window.document.documentElement;
-      root.classList.remove('light', 'dark');
+      console.log('Theme Effect Triggered:', theme);
+      
+      const applyTheme = (t) => {
+          console.log('Applying theme:', t);
+          root.classList.remove('light', 'dark');
+          
+          let effectiveTheme = t;
+          if (t === 'system') {
+              effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+              console.log('System preference resolved to:', effectiveTheme);
+          }
+          
+          root.classList.add(effectiveTheme);
+          console.log('Root classes after update:', root.classList.toString());
+      };
+
+      applyTheme(theme);
+      localStorage.setItem('theme', theme);
+
       if (theme === 'system') {
-          const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-          root.classList.add(systemTheme);
-      } else {
-          root.classList.add(theme);
+          const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+          const handleChange = () => applyTheme('system');
+          mediaQuery.addEventListener('change', handleChange);
+          return () => mediaQuery.removeEventListener('change', handleChange);
       }
   }, [theme]);
 
@@ -1631,21 +1649,21 @@ export default function App() {
         {/* Global Datalists removed - replaced by AutocompleteInput */}
 
         {/* --- Top Bar --- */}
-        <div className="h-14 bg-slate-950 border-b border-slate-800 flex items-center px-4 justify-between shrink-0">
+        <div className="h-14 bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 flex items-center px-4 justify-between shrink-0 transition-colors">
             <div className="flex items-center gap-3">
                 <div className="bg-blue-600 p-1.5 rounded-lg"><Network size={20} className="text-white"/></div>
                 <div>
-                    <h1 className="font-bold text-lg leading-tight text-white">Circuit Studio</h1>
+                    <h1 className="font-bold text-lg leading-tight text-slate-900 dark:text-white">Circuit Studio</h1>
                     <div className="text-[10px] text-slate-500 font-medium tracking-wider">PROFESSIONAL LABELER</div>
                 </div>
             </div>
             <div className="flex items-center gap-4">
-                <div className="flex bg-slate-800 rounded-md p-1 border border-slate-700 items-center">
-                    <button onClick={undo} disabled={past.length===0} className="p-2 hover:bg-slate-700 rounded text-slate-400 hover:text-white disabled:opacity-30"><Undo size={16}/></button>
-                    <button onClick={redo} disabled={future.length===0} className="p-2 hover:bg-slate-700 rounded text-slate-400 hover:text-white disabled:opacity-30"><Redo size={16}/></button>
+                <div className="flex bg-slate-100 dark:bg-slate-800 rounded-md p-1 border border-slate-200 dark:border-slate-700 items-center transition-colors">
+                    <button onClick={undo} disabled={past.length===0} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-30 transition-colors"><Undo size={16}/></button>
+                    <button onClick={redo} disabled={future.length===0} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-30 transition-colors"><Redo size={16}/></button>
                 </div>
                 
-                <button onClick={() => setShowSettings(true)} className="flex items-center gap-2 px-3 py-1.5 text-slate-300 hover:text-white hover:bg-slate-800 rounded transition-colors text-sm font-medium">
+                <button onClick={() => setShowSettings(true)} className="flex items-center gap-2 px-3 py-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors text-sm font-medium">
                     <Settings size={16} />
                     <span>Settings</span>
                 </button>
@@ -1659,35 +1677,35 @@ export default function App() {
         {/* --- Workspace --- */}
         <div className="flex flex-1 overflow-hidden">
             {/* Left Sidebar: Combined File Browser & Inspector */}
-            <div ref={sidebarRef} className="w-72 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-20 shadow-xl relative">
+            <div ref={sidebarRef} className="w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col shrink-0 z-20 shadow-xl relative transition-colors">
                 {/* 1. Top Section: File Browser */}
                 <div style={{ height: `${sidebarSplit}%`, minHeight: '10%', maxHeight: '90%' }} className="flex flex-col min-h-0">
-                    <div className="p-3 border-b border-slate-800 flex items-center gap-2 bg-slate-950/50 text-slate-200">
-                        <FolderOpen size={14} className="text-blue-500"/>
+                    <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center gap-2 bg-slate-50 dark:bg-slate-950/50 text-slate-700 dark:text-slate-200 transition-colors">
+                        <FolderOpen size={14} className="text-blue-600 dark:text-blue-500"/>
                         <span className="text-xs font-bold uppercase tracking-wider">Project Files</span>
                     </div>
                     
-                    <div className="p-3 border-b border-slate-800 space-y-2">
-                        <button onClick={() => fileInputRef.current.click()} className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 py-1.5 rounded border border-slate-700 flex items-center justify-center gap-2 text-xs font-medium transition-colors">
+                    <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-2 transition-colors">
+                        <button onClick={() => fileInputRef.current.click()} className="w-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-1.5 rounded border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium transition-colors">
                             <Plus size={14}/> Add Files
                         </button>
                         <input ref={fileInputRef} type="file" multiple accept="image/*,.json" className="hidden" onChange={handleFileUpload} />
                         <div className="relative">
-                            <Search size={12} className="absolute left-2.5 top-2 text-slate-500"/>
-                            <input type="text" placeholder="Filter..." className="w-full bg-slate-950 border border-slate-800 rounded py-1.5 pl-7 pr-2 text-[11px] text-slate-300 focus:border-blue-500 outline-none" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}/>
+                            <Search size={12} className="absolute left-2.5 top-2 text-slate-400 dark:text-slate-500"/>
+                            <input type="text" placeholder="Filter..." className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded py-1.5 pl-7 pr-2 text-[11px] text-slate-900 dark:text-slate-300 focus:border-blue-500 outline-none transition-colors" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}/>
                         </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto custom-scrollbar">
-                        {filteredFiles.length === 0 ? <div className="p-4 text-center text-slate-600 text-[10px] italic">No files loaded</div> : (
+                        {filteredFiles.length === 0 ? <div className="p-4 text-center text-slate-400 dark:text-slate-600 text-[10px] italic">No files loaded</div> : (
                             <div className="flex flex-col">
                                 {filteredFiles.map((f, i) => {
                                     const realIdx = fileList.indexOf(f);
                                     const isActive = realIdx === currentFileIndex;
                                     return (
                                         <div key={f.id} onClick={() => { saveCurrentStateToMemory(); loadFile(realIdx); }} 
-                                            className={`flex items-center px-3 py-2 cursor-pointer border-l-2 transition-all ${isActive ? 'bg-blue-900/20 border-blue-500 text-white' : 'border-transparent text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}>
-                                            <CheckCircle2 size={10} className={`mr-2 ${f.status === 'annotated' || f.data ? 'text-green-500' : 'text-slate-700'}`}/>
+                                            className={`flex items-center px-3 py-2 cursor-pointer border-l-2 transition-all ${isActive ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 text-blue-700 dark:text-white' : 'border-transparent text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'}`}>
+                                            <CheckCircle2 size={10} className={`mr-2 ${f.status === 'annotated' || f.data ? 'text-green-500' : 'text-slate-300 dark:text-slate-700'}`}/>
                                             <span className="text-xs truncate font-medium">{f.name}</span>
                                         </div>
                                     );
@@ -1696,36 +1714,36 @@ export default function App() {
                         )}
                     </div>
                     
-                    <div className="p-2 bg-slate-950 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500 shrink-0">
-                        <button onClick={() => switchFile(-1)} className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"><ChevronLeft size={14}/></button>
+                    <div className="p-2 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center text-[10px] text-slate-500 shrink-0 transition-colors">
+                        <button onClick={() => switchFile(-1)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors"><ChevronLeft size={14}/></button>
                         <span className="font-mono">{fileList.length > 0 ? `${currentFileIndex + 1}/${fileList.length}` : '-/-'}</span>
-                        <button onClick={() => switchFile(1)} className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"><ChevronRight size={14}/></button>
+                        <button onClick={() => switchFile(1)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors"><ChevronRight size={14}/></button>
                     </div>
                 </div>
 
                 {/* Resizer Handle */}
                 <div 
-                    className="h-1 bg-slate-950 border-y border-slate-800 cursor-row-resize hover:bg-blue-600 transition-colors flex items-center justify-center group z-10"
+                    className="h-1 bg-slate-200 dark:bg-slate-950 border-y border-slate-300 dark:border-slate-800 cursor-row-resize hover:bg-blue-500 dark:hover:bg-blue-600 transition-colors flex items-center justify-center group z-10"
                     onMouseDown={() => setIsResizingSidebar(true)}
                 >
-                    <GripHorizontal size={12} className="text-slate-700 group-hover:text-white/50"/>
+                    <GripHorizontal size={12} className="text-slate-400 dark:text-slate-700 group-hover:text-white/50"/>
                 </div>
 
                 {/* 2. Bottom Section: Inspector (Flexible) */}
-                <div className="flex-1 flex flex-col bg-slate-900 overflow-hidden relative">
+                <div className="flex-1 flex flex-col bg-white dark:bg-slate-900 overflow-hidden relative transition-colors">
                      {/* Local Datalists removed, using global-comp-types and global-port-names defined at root */}
                      
-                     <div className="h-9 border-b border-slate-800 flex items-center px-4 font-bold text-xs text-slate-400 uppercase tracking-wider bg-slate-950/50 shrink-0">
-                        <Settings size={14} className="mr-2 text-slate-500"/> Properties
+                     <div className="h-9 border-b border-slate-200 dark:border-slate-800 flex items-center px-4 font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider bg-slate-50 dark:bg-slate-950/50 shrink-0 transition-colors">
+                        <Settings size={14} className="mr-2 text-slate-400 dark:text-slate-500"/> Properties
                      </div>
                      <div className="flex-1 overflow-y-auto p-4">
                          {singleSelected ? (
                              singleSelected.type === 'component' ? (
                                  <div className="space-y-4 animate-in fade-in slide-in-from-right-5 duration-200">
-                                     <div><label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Name</label><input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600" value={singleSelected.data.label} onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }} /></div>
-                                     <div><label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Type</label>
+                                     <div><label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Name</label><input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={singleSelected.data.label} onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, label: v } } : n)); }} /></div>
+                                     <div><label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Type</label>
                                         <AutocompleteInput 
-                                            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600" 
+                                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" 
                                             options={uniqueComponentTypes}
                                             value={singleSelected.data.type} 
                                             onFocus={(e) => e.target.select()}
@@ -1733,8 +1751,8 @@ export default function App() {
                                         />
                                      </div>
                                      
-                                     <div className="pt-2 border-t border-slate-800">
-                                         <label className="text-[10px] font-bold text-slate-400 uppercase mb-2 block">Ports</label>
+                                     <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                                         <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 block">Ports</label>
                                          <div className="space-y-1">
                                              {nodes.filter(n => n.parentId === singleSelected.id).map(p => {
                                                 const hasConflict = conflicts.has(p.id);
@@ -1748,7 +1766,7 @@ export default function App() {
                                                             value={p.data.label} 
                                                             onChange={v => { saveHistory(); setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
                                                          />
-                                                         <input className="w-16 bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none focus:border-blue-500 placeholder-slate-600" value={p.data.type||''} placeholder="Type" onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, type: v } } : n)); }}/>
+                                                         <input className="w-16 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={p.data.type||''} placeholder="Type" onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, type: v } } : n)); }}/>
                                                      </div>
                                                      {hasConflict && <div className="text-[9px] text-red-400 flex items-center gap-1"><AlertTriangle size={10}/> Net Conflict Detected</div>}
                                                  </div>
@@ -1759,41 +1777,41 @@ export default function App() {
                                      </div>
 
                                      {/* Position & Size Editing (Moved to bottom) */}
-                                     <div className="pt-2 border-t border-slate-800">
+                                     <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
                                          <div className="grid grid-cols-2 gap-2">
                                              <div>
-                                                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">X</label>
-                                                 <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 font-mono outline-none focus:border-blue-500" 
+                                                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">X</label>
+                                                 <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.position.x)} 
                                                      onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, x: v } } : n)); }} />
                                              </div>
                                              <div>
-                                                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Y</label>
-                                                 <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 font-mono outline-none focus:border-blue-500" 
+                                                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Y</label>
+                                                 <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.position.y)} 
                                                      onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, y: v } } : n)); }} />
                                              </div>
                                              <div>
-                                                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">W</label>
-                                                 <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 font-mono outline-none focus:border-blue-500" 
+                                                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">W</label>
+                                                 <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.width)} 
                                                      onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, width: v } : n)); }} />
                                              </div>
                                              <div>
-                                                 <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">H</label>
-                                                 <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 font-mono outline-none focus:border-blue-500" 
+                                                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">H</label>
+                                                 <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                      type="number" value={Math.round(singleSelected.height)} 
                                                      onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, height: v } : n)); }} />
                                              </div>
                                          </div>
                                      </div>
 
-                                     <button onClick={() => deleteSelected(false)} className="w-full py-2 bg-red-900/20 text-red-400 border border-red-900/50 rounded text-xs font-bold hover:bg-red-900/40 flex justify-center gap-2 mt-4"><Trash2 size={14}/> Delete Component</button>
+                                     <button onClick={() => deleteSelected(false)} className="w-full py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 rounded text-xs font-bold hover:bg-red-100 dark:hover:bg-red-900/40 flex justify-center gap-2 mt-4"><Trash2 size={14}/> Delete Component</button>
                                  </div>
                              ) : (
                                  // Wire / Net / Port Selection
                                  <div className="space-y-4 animate-in fade-in slide-in-from-right-5 duration-200">
-                                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-800">
+                                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-200 dark:border-slate-800">
                                         <Network size={16} className="text-slate-400"/>
                                         <span className="text-xs font-bold text-slate-300">
                                            {singleSelected.type === 'net_edge' ? 'Wire Segment' : (singleSelected.type === 'port' ? 'Port' : 'Net Node')}
@@ -1802,11 +1820,11 @@ export default function App() {
                                     
                                     {/* Port Name & Type Editing */}
                                     {singleSelected.type === 'port' && (
-                                        <div className="mb-4 pb-4 border-b border-slate-800 space-y-3">
+                                        <div className="mb-4 pb-4 border-b border-slate-200 dark:border-slate-800 space-y-3">
                                             <div>
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Name</label>
+                                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Name</label>
                                                 <AutocompleteInput 
-                                                    className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600"
+                                                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600"
                                                     options={uniquePortNames}
                                                     value={singleSelected.data.label} 
                                                     onFocus={(e) => e.target.select()}
@@ -1814,8 +1832,8 @@ export default function App() {
                                                 />
                                             </div>
                                             <div>
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Type</label>
-                                                <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600" 
+                                                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Type</label>
+                                                <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" 
                                                     value={singleSelected.data.type || ''} 
                                                     placeholder="e.g. IN/OUT"
                                                     onChange={e => { saveHistory(); const v=e.target.value; setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
@@ -1826,9 +1844,9 @@ export default function App() {
 
                                     {/* Net Name Input with Propagation */}
                                      <div>
-                                         <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Net Name</label>
+                                         <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Net Name</label>
                                          <div className="flex gap-2">
-                                            <input className={`w-full bg-slate-800 border rounded px-2 py-1.5 text-sm text-slate-200 outline-none focus:border-blue-500 placeholder-slate-600 ${conflicts.has(singleSelected.id) ? 'border-red-500/50 bg-red-900/10' : 'border-slate-700'}`} 
+                                            <input className={`w-full bg-slate-800 border rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600 ${conflicts.has(singleSelected.id) ? 'border-red-500/50 bg-red-900/10' : 'border-slate-700'}`} 
                                                 value={singleSelected.data?.netName || ''} 
                                                 onChange={e => { 
                                                     saveHistory(); 
@@ -1852,17 +1870,17 @@ export default function App() {
 
                                      {/* Node Position Editing (Moved to bottom) */}
                                      {singleSelected.type !== 'net_edge' && (
-                                         <div className="pt-2 border-t border-slate-800">
+                                         <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
                                              <div className="grid grid-cols-2 gap-2">
                                                  <div>
-                                                     <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">X</label>
-                                                     <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 font-mono outline-none focus:border-blue-500" 
+                                                     <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">X</label>
+                                                     <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                          type="number" value={Math.round(singleSelected.position.x)} 
                                                          onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, x: v } } : n)); }} />
                                                  </div>
                                                  <div>
-                                                     <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Y</label>
-                                                     <input className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 font-mono outline-none focus:border-blue-500" 
+                                                     <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Y</label>
+                                                     <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-xs text-slate-900 dark:text-slate-300 font-mono outline-none focus:border-blue-500" 
                                                          type="number" value={Math.round(singleSelected.position.y)} 
                                                          onChange={e => { saveHistory(); const v=parseInt(e.target.value); setNodes(prev => prev.map(n => n.id === singleSelected.id ? { ...n, position: { ...n.position, y: v } } : n)); }} />
                                                  </div>
@@ -1872,16 +1890,16 @@ export default function App() {
 
                                      <div className="grid grid-cols-2 gap-2 mt-4">
                                         <button onClick={() => deleteSelected(false)} className="py-2 bg-slate-800 text-slate-400 rounded text-[10px] font-bold hover:bg-slate-700 flex justify-center gap-1 border border-slate-700"><Trash2 size={12}/> Del Segment</button>
-                                        <button onClick={() => deleteSelected(true)} className="py-2 bg-red-900/20 text-red-400 rounded text-[10px] font-bold hover:bg-red-900/40 flex justify-center gap-1 border border-red-900/50"><Trash2 size={12}/> Del Net</button>
+                                        <button onClick={() => deleteSelected(true)} className="py-2 bg-red-900/20 text-red-400 rounded text-[10px] font-bold hover:bg-red-100 dark:hover:bg-red-900/40 flex justify-center gap-1 border border-red-900/50"><Trash2 size={12}/> Del Net</button>
                                      </div>
                                  </div>
                              )
                          ) : (
                              <div className="h-full flex flex-col items-center justify-center text-slate-700 gap-2">
-                                 <MousePointer2 size={48} strokeWidth={1} className="text-slate-700"/>
+                                 <MousePointer2 size={48} strokeWidth={1} className="text-slate-300 dark:text-slate-700"/>
                                  <div className="text-center">
-                                     <p className="text-sm font-bold text-slate-600">No Selection</p>
-                                     <p className="text-xs text-slate-600 mt-1">Select an object to edit</p>
+                                     <p className="text-sm font-bold text-slate-400 dark:text-slate-600">No Selection</p>
+                                     <p className="text-xs text-slate-400 dark:text-slate-600 mt-1">Select an object to edit</p>
                                  </div>
                              </div>
                          )}
@@ -1892,9 +1910,9 @@ export default function App() {
             {/* Center: Canvas */}
             <div className="flex-1 relative flex flex-col bg-slate-50 dark:bg-slate-900 overflow-hidden transition-colors duration-200">
                 {/* Grid Background Pattern */}
-                <div className="absolute inset-0 pointer-events-none opacity-50 dark:opacity-20" 
+                <div className="absolute inset-0 pointer-events-none opacity-40 dark:opacity-25" 
                     style={{ 
-                        backgroundImage: `radial-gradient(${theme === 'light' ? '#94a3b8' : '#cbd5e1'} 1px, transparent 1px)`, 
+                        backgroundImage: `radial-gradient(var(--grid-dot-color) 1px, transparent 1px)`, 
                         backgroundSize: '20px 20px',
                         transform: `translate(${transform.x % 20}px, ${transform.y % 20}px)`
                     }} 

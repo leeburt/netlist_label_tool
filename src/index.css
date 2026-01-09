@@ -10,5 +10,13 @@ html, body, #root {
   overflow: hidden;
 }
 
+:root {
+  --grid-dot-color: #94a3b8; /* Slate 400 - Visible on Light (Slate 50) */
+  --net-color-lightness: 40%;
+}
 
-
+:root.dark, html.dark {
+  --grid-dot-color: #e2e8f0; /* Slate 200 - Visible on Dark (Slate 900) with low opacity */
+  --net-color-lightness: 65%;
+  color-scheme: dark;
+}

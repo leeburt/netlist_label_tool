@@ -59,10 +59,21 @@ const pythonDataToReactState = (jsonStr: string) => {
     let nodes: any[] = [];
     let edges: any[] = [];
     let mergeReport = new Set<string>();
-    
+    let extraData: any = {};
     // Check for New Format (viz_core.py compatible)
-    if (data.components || data.external_ports) {
+    // Fix: Only check for 'components' to avoid incorrectly capturing Old Format files that happen to have 'external_ports'
+    if (data.components) {
+        // ... (existing new format logic)
+        // Extract extra fields to preserve (e.g., llm_check, ckt_type, etc.)
+        const knownKeys = new Set(['components', 'external_ports', 'connections']);
+        Object.keys(data).forEach(key => {
+            if (!knownKeys.has(key)) {
+                extraData[key] = data[key];
+            }
+        });
+
         // 1. Parse Components
+        // ... (existing parsing logic)
         Object.entries(data.components || {}).forEach(([compName, compInfo]: [string, any]) => {
              // Handle box: [minX, minY, maxX, maxY]
              const [x1, y1, x2, y2] = compInfo.box;
@@ -88,19 +99,26 @@ const pythonDataToReactState = (jsonStr: string) => {
                      type: 'port',
                      position: { x: p.coord[0], y: p.coord[1] },
                      parentId: compId,
-                     data: { label: p.name, isExternal: false, compName: compName }
+                     data: { label: p.name, isExternal: false, compName: compName, type: p.type || "" }
                  });
              });
         });
         
         // 2. Parse External Ports
-        Object.entries(data.external_ports || {}).forEach(([portName, portInfo]: [string, any]) => {
+        Object.entries(data.external_ports || {}).forEach(([key, info]: [string, any]) => {
              const pId = getId();
+             // Support both 'coord' and 'center' fields, default to [0,0] if missing to prevent crash
+             const coord = info.coord || info.center || [0, 0];
+             
+             // Determine Label and ExternalId
+             const label = info.name || key;
+             const externalId = key;
+
              nodes.push({
                  id: pId,
                  type: 'port',
-                 position: { x: portInfo.coord[0], y: portInfo.coord[1] },
-                 data: { label: portName, isExternal: true, compName: 'external' }
+                 position: { x: coord[0], y: coord[1] },
+                 data: { label: label, isExternal: true, compName: 'external', type: info.type || "", externalId: externalId }
              });
         });
         
@@ -113,7 +131,11 @@ const pythonDataToReactState = (jsonStr: string) => {
             (conn.nodes || []).forEach((item: any) => {
                 let foundNode = null;
                 if (item.component === 'external') {
-                    foundNode = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.label === item.port);
+                    // Try match externalId, fallback to label
+                    foundNode = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.externalId === item.port);
+                    if (!foundNode) {
+                        foundNode = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.label === item.port);
+                    }
                 } else {
                     const compId = `comp_${item.component}`;
                     foundNode = nodes.find(n => n.type === 'port' && n.parentId === compId && n.data.label === item.port);
@@ -152,10 +174,22 @@ const pythonDataToReactState = (jsonStr: string) => {
             }
         });
         
-        return { nodes, edges, warnings: [] };
+        return { nodes, edges, warnings: [], extraData };
     }
 
     // --- Fallback: Old Format (Keep existing logic) ---
+    // isOldFormat = true; // Not needed if we don't switch output format based on flag, but based on input extraData
+    
+    // Extract extra fields for Old Format too
+    Object.keys(data).forEach(key => {
+        if (key !== 'ckt_netlist' && key !== 'connection') {
+            extraData[key] = data[key];
+        }
+    });
+
+    // Mark as Old Format so we export it back in the same format
+    extraData.isOldFormat = true;
+
     const findNearestNodeInList = (list: any[], x: number, y: number) => {
         for (const node of list) {
             if ((node.type === 'port' || node.type === 'net_node') && 
@@ -182,7 +216,7 @@ const pythonDataToReactState = (jsonStr: string) => {
             position: { x, y },
             width: w, height: h,
             data: { 
-                label: typeof comp.name === 'string' ? comp.name : '', 
+                label: (typeof comp.name === 'string' && comp.name) ? comp.name : (comp.device_name || ''), 
                 type: typeof comp.component_type === 'string' ? comp.component_type : '', 
                 rawId: comp.id 
             }
@@ -196,9 +230,26 @@ const pythonDataToReactState = (jsonStr: string) => {
                 type: 'port',
                 position: { x: center[0], y: center[1] },
                 parentId: compId,
-                data: { label: portName, isExternal: false, compName: comp.device_name }
+                data: { label: portName, type: portInfo.type || "", isExternal: false, compName: comp.device_name }
             });
         });
+    });
+
+    // 1b. Parse External Ports (if present)
+    Object.entries(data.external_ports || {}).forEach(([key, info]: [string, any]) => {
+         const center = info.center || info.coord;
+         if (!center) return;
+         const pId = getId();
+         
+         const label = info.name || key;
+         const externalId = key;
+
+         nodes.push({
+             id: pId,
+             type: 'port',
+             position: { x: center[0], y: center[1] },
+             data: { label: label, type: info.type || "", isExternal: true, compName: 'external', externalId: externalId }
+         });
     });
 
     // 2. Parse Connections with Auto-Merge Logic
@@ -213,7 +264,10 @@ const pythonDataToReactState = (jsonStr: string) => {
     };
 
     Object.entries(data.connection || {}).forEach(([rawNetName, netInfo]: [string, any]) => {
+        let hasSegments = false;
+        
         (netInfo.pixels || []).forEach((seg: any) => {
+            hasSegments = true;
             const [p1, p2] = seg;
             let currentNetName = getEffectiveNetName(rawNetName);
 
@@ -260,91 +314,228 @@ const pythonDataToReactState = (jsonStr: string) => {
                 }
             }
         });
+
+        // Fallback for connections with NO pixels (Star Topology)
+        if (!hasSegments && (netInfo.ports || []).length > 1) {
+            let currentNetName = getEffectiveNetName(rawNetName);
+            const validPortNodes: any[] = [];
+            
+            // Find port nodes
+            netInfo.ports.forEach((nodeInfo: any) => {
+                const [devName, portName] = nodeInfo;
+                // Find corresponding React port node
+                // Note: Components should already be parsed
+                const compNode = nodes.find(n => n.type === 'component' && n.data.label === devName);
+                if (compNode) {
+                    const portNode = nodes.find(n => n.parentId === compNode.id && n.data.label === portName);
+                    if (portNode) {
+                        validPortNodes.push(portNode);
+                        if (!portNode.data.netName) portNode.data.netName = currentNetName;
+                    }
+                } else if (devName === portName || devName === 'external') { 
+                    // Try external port match
+                    // Match by externalId or label
+                    let extPort = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.externalId === portName);
+                    if (!extPort) {
+                        extPort = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.label === portName);
+                    }
+                    if (extPort) {
+                        validPortNodes.push(extPort);
+                        if (!extPort.data.netName) extPort.data.netName = currentNetName;
+                    }
+                }
+            });
+
+            if (validPortNodes.length > 1) {
+                // Calculate Centroid
+                const cx = validPortNodes.reduce((sum, n) => sum + n.position.x, 0) / validPortNodes.length;
+                const cy = validPortNodes.reduce((sum, n) => sum + n.position.y, 0) / validPortNodes.length;
+                
+                const jId = getId();
+                nodes.push({ 
+                    id: jId, 
+                    type: 'net_node', 
+                    position: { x: cx, y: cy }, 
+                    data: { netName: currentNetName } 
+                });
+
+                validPortNodes.forEach(pn => {
+                    edges.push({
+                        id: `edge_${getId()}`,
+                        source: pn.id,
+                        target: jId,
+                        type: 'net_edge',
+                        data: { netName: currentNetName }
+                    });
+                });
+            }
+        }
     });
 
     nodes.forEach(n => { if (n.data?.netName && netRenames.has(n.data.netName)) n.data.netName = getEffectiveNetName(n.data.netName); });
     edges.forEach(e => { if (e.data?.netName && netRenames.has(e.data.netName)) e.data.netName = getEffectiveNetName(e.data.netName); });
 
-    return { nodes, edges, warnings: Array.from(mergeReport) };
+    return { nodes, edges, warnings: Array.from(mergeReport), extraData };
   } catch (e) {
     console.error("JSON Parse Error", e);
     return null;
   }
 };
 
-const reactStateToPythonData = (nodes: any[]) => {
-    // Export to New Format (viz_core.py compatible)
-    const components: any = {};
-    const external_ports: any = {};
-    const connections: any[] = [];  
-    const nets = new Map(); // netName -> Set of {component, port}
+const reactStateToPythonData = (nodes: any[], edges: any[], extraData: any = {}) => {
+    // --- Always Export to Unified Netlist Format ---
     
-    // 1. Components
+    const output: any = {
+        ckt_netlist: [],
+        ckt_type: "ckt",
+        external_ports: {},
+        connection: {},
+        llm_check: [],
+        ...extraData
+    };
+    
+    // Remove internal flags
+    delete output.isOldFormat;
+    delete output.components; // Ensure old keys are removed if present in extraData
+    delete output.connections;
+
+    const ckt_netlist: any[] = [];
+    const external_ports: any = {};
+    
+    // Helper: Get absolute position
+    const getAbsPos = (node: any) => {
+        if (node.parentNode) {
+            const parent = nodes.find(n => n.id === node.parentNode);
+            if (parent) {
+                return { x: node.position.x + parent.position.x, y: node.position.y + parent.position.y };
+            }
+        }
+        return { x: node.position.x, y: node.position.y };
+    };
+
+    // 1. Components & Ports
     nodes.filter(n => n.type === 'component').forEach(n => {
         const compName = n.data.label;
-        if (!compName) return;
-        
         const x1 = Math.round(n.position.x);
         const y1 = Math.round(n.position.y);
         const x2 = Math.round(n.position.x + n.width);
         const y2 = Math.round(n.position.y + n.height);
         
-        const compPorts = nodes.filter(p => p.parentId === n.id).map(p => ({
-            name: p.data.label,
-            coord: [Math.round(p.position.x), Math.round(p.position.y)]
-        }));
+        const ports: any = {};
+        const port_connection: any = {};
         
-        components[compName] = {
-            type: n.data.type || '',
-            box: [x1, y1, x2, y2],
-            ports: compPorts
-        };
-        
-        // Track connectivity
         nodes.filter(p => p.parentId === n.id).forEach(p => {
-             const net = p.data.netName;
-             if (net) {
-                 if (!nets.has(net)) nets.set(net, []);
-                 nets.get(net).push({ component: compName, port: p.data.label });
-             }
-        });
-    });
-    
-    // 2. External Ports
-    nodes.filter(n => n.type === 'port' && n.data.isExternal).forEach(n => {
-        const portName = n.data.label;
-        if (!portName) return;
-        
-        external_ports[portName] = {
-            type: n.data.type || '',
-            coord: [Math.round(n.position.x), Math.round(n.position.y)]
-        };
-        
-        const net = n.data.netName;
-        if (net) {
-             if (!nets.has(net)) nets.set(net, []);
-             nets.get(net).push({ component: 'external', port: portName });
-        }
-    });
-    
-    // 3. Connections
-    nets.forEach((nodeList) => {
-        const uniqueNodes: any[] = [];
-        const seen = new Set();
-        nodeList.forEach((item: any) => {
-            const key = `${item.component}:${item.port}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                uniqueNodes.push(item);
+            const portName = p.data.label;
+            const abs = getAbsPos(p);
+            const absX = Math.round(abs.x);
+            const absY = Math.round(abs.y);
+            
+            // Ports in Old Format: "portName": { "top_left": ..., "bottom_right": ..., "center": [x, y] }
+            const pR = 5;
+            ports[portName] = {
+                type: p.data.type || "",
+                center: [absX, absY],
+                top_left: [absX - pR, absY - pR],
+                bottom_right: [absX + pR, absY + pR]
+            };
+            
+            if (p.data.netName) {
+                port_connection[portName] = p.data.netName;
             }
         });
         
-        if (uniqueNodes.length > 1) {
-            connections.push({ nodes: uniqueNodes, points: [] });
+        ckt_netlist.push({
+            id: n.data.rawId || "#0", 
+            device_name: compName,
+            component_type: n.data.type || "",
+            bbox: { top_left: [x1, y1], bottom_right: [x2, y2] },
+            port: ports,
+            port_connection: port_connection,
+            name: n.data.label,
+            attribute: []
+        });
+    });
+    
+    // 1b. External Ports
+    let extIdCounter = 0;
+    nodes.filter(n => n.type === 'port' && n.data.isExternal).forEach(n => {
+        const portName = n.data.label;
+        const absX = Math.round(n.position.x);
+        const absY = Math.round(n.position.y);
+        const pR = 5;
+        
+        let exId = n.data.externalId;
+        if (!exId) {
+            exId = `${++extIdCounter}`;
         }
+        
+        // Ensure format "#ID"
+        const finalKey = exId.startsWith('#') ? exId : `#${exId}`;
+        
+        external_ports[finalKey] = {
+            name: portName,
+            type: n.data.type || "",
+            center: [absX, absY],
+            top_left: [absX - pR, absY - pR],
+            bottom_right: [absX + pR, absY + pR]
+        };
     });
 
-    return JSON.stringify({ components, external_ports, connections }, null, 2);
+    // 2. Connections
+    const netMap: any = {}; // netName -> { ports: [], pixels: [] }
+    
+    // 2a. Collect Ports
+    nodes.forEach(n => {
+        if (n.type === 'port' && n.data.netName) {
+            const net = n.data.netName;
+            if (!netMap[net]) netMap[net] = { ports: [], pixels: [] };
+            
+            let devName = "unknown";
+            let portIdentifier = n.data.label;
+            
+            if (n.parentId) {
+                const parent = nodes.find(p => p.id === n.parentId);
+                if (parent) devName = parent.data.label;
+            } else if (n.data.isExternal) {
+                devName = "external";
+                portIdentifier = n.data.externalId || n.data.label;
+            }
+            
+            if (devName !== "unknown") {
+                const exists = netMap[net].ports.some((p: any) => p[0] === devName && p[1] === portIdentifier);
+                if (!exists) netMap[net].ports.push([devName, portIdentifier]);
+            }
+        }
+    });
+    
+    // 2b. Collect Pixels (Edges)
+    edges.forEach(e => {
+        const srcNode = nodes.find(n => n.id === e.source);
+        const tgtNode = nodes.find(n => n.id === e.target);
+        
+        if (srcNode && tgtNode) {
+            let net = e.data?.netName || srcNode.data.netName || tgtNode.data.netName;
+            
+            if (net) {
+                if (!netMap[net]) netMap[net] = { ports: [], pixels: [] };
+                
+                const p1 = getAbsPos(srcNode);
+                const p2 = getAbsPos(tgtNode);
+                
+                netMap[net].pixels.push([
+                    [Math.round(p1.x), Math.round(p1.y)],
+                    [Math.round(p2.x), Math.round(p2.y)]
+                ]);
+            }
+        }
+    });
+    
+    output.ckt_netlist = ckt_netlist;
+    output.external_ports = external_ports;
+    output.connection = netMap;
+    if (!output.ckt_type) output.ckt_type = "ckt";
+    
+    return JSON.stringify(output, null, 2);
 };
 
 // --- 2. UI Components ---
@@ -934,6 +1125,7 @@ export default function App() {
   
   // --- File System State ---
   const [fileList, setFileList] = useState<any[]>([]); 
+  const [projectDirHandle, setProjectDirHandle] = useState<any>(null);
   const [currentFileIndex, setCurrentFileIndex] = useState(-1);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -963,6 +1155,103 @@ export default function App() {
   // --- Layout State (Resizable Sidebar) ---
   const [sidebarSplit, setSidebarSplit] = useState(40); // % height of Top Panel (File List)
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+
+  // --- Integration State (Task Mode) ---
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [extraTaskData, setExtraTaskData] = useState<any>({}); // Store preserved fields
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('id');
+    if (id) {
+        setTaskId(id);
+        
+        Promise.all([
+            fetch(`/api/get_task_json/${id}`).then(r => r.json()),
+            fetch(`/api/get_task_image/${id}`).then(r => r.blob())
+        ]).then(([jsonData, imgBlob]) => {
+            if (jsonData.error) {
+                setNotification("Error: " + jsonData.error);
+                return;
+            }
+            
+            // Process JSON
+            const parseResult = pythonDataToReactState(JSON.stringify(jsonData));
+            if (!parseResult) {
+                setNotification("Failed to parse task data");
+                return;
+            }
+            const { nodes: n, edges: e, warnings, extraData } = parseResult;
+
+            if (extraData) setExtraTaskData(extraData);
+            if (warnings && warnings.length > 0) setNotification(`Loaded with warnings: ${warnings.join('\n')}`);
+            
+            // Create Dummy File Object
+            const dummyFile = {
+                id: 'task_' + id,
+                name: 'task_result.json',
+                imgFile: new File([imgBlob], "image.png", { type: "image/png" }),
+                data: { nodes: n, edges: e },
+                status: 'annotated'
+            };
+            
+            setFileList([dummyFile]);
+            
+            // Set state directly
+            setNodes(n);
+            setEdges(e);
+            setPast([]); setFuture([]);
+            
+            const src = URL.createObjectURL(imgBlob);
+            setBgImage(src as any);
+            
+            // Auto-fit image
+            const img = new Image();
+            img.onload = () => {
+                if (containerRef.current) {
+                    const rect = containerRef.current.getBoundingClientRect();
+                    const k = Math.min((rect.width - 40) / img.width, (rect.height - 40) / img.height, 1);
+                    setTransform({ x: Math.floor((rect.width - img.width * k) / 2), y: Math.floor((rect.height - img.height * k) / 2), k });
+                }
+            };
+            img.src = src;
+            
+            setCurrentFileIndex(0);
+            setNotification("Task loaded successfully");
+
+        }).catch(err => {
+            console.error(err);
+            setNotification("Failed to load task data");
+        });
+    }
+  }, []);
+
+  const handleSaveToServer = async () => {
+      if (!taskId) return;
+      
+      const jsonStr = reactStateToPythonData(nodes, edges, extraTaskData);
+      try {
+          const jsonData = JSON.parse(jsonStr);
+          const res = await fetch(`/api/save_task/${taskId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(jsonData)
+          });
+          
+          const result = await res.json();
+          if (result.success) {
+              setNotification("Saved successfully!");
+              if (window.opener) {
+                  window.opener.postMessage('task_updated', '*');
+              }
+          } else {
+              setNotification("Save failed: " + result.error);
+          }
+      } catch (e) {
+          console.error("Save error", e);
+          setNotification("Save error: " + e);
+      }
+  };
 
   // --- Unique Values for Dropdowns ---
   const uniqueComponentTypes = useMemo(() => {
@@ -1035,6 +1324,117 @@ export default function App() {
   }, [isResizingSidebar]);
 
   // --- File Management Logic ---
+  const handleAddFilesWithPicker = async () => {
+      try {
+          if (typeof (window as any).showOpenFilePicker === 'function') {
+               const handles = await (window as any).showOpenFilePicker({
+                  multiple: true,
+                  types: [{
+                      description: 'Circuit Files',
+                      accept: {
+                          'image/*': ['.png', '.jpg', '.jpeg', '.webp'],
+                          'application/json': ['.json']
+                      }
+                  }]
+              });
+
+              const filesAndHandles = await Promise.all(handles.map(async (h: any) => ({
+                  file: await h.getFile(),
+                  handle: h
+              })));
+
+              const images = filesAndHandles.filter((x: any) => x.file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(x.file.name));
+              const jsons = filesAndHandles.filter((x: any) => x.file.name.endsWith('.json'));
+
+              const newFiles = images.map((imgItem: any) => {
+                  const img = imgItem.file;
+                  const baseName = img.name.substring(0, img.name.lastIndexOf('.'));
+                  const matchingJsonItem = jsons.find((j: any) => j.file.name === `${baseName}.json` || j.file.name.startsWith(baseName));
+                  
+                  return {
+                      id: getId(),
+                      name: img.name,
+                      imgFile: img,
+                      jsonFile: matchingJsonItem?.file,
+                      jsonHandle: matchingJsonItem?.handle,
+                      data: null,
+                      status: matchingJsonItem ? 'annotated' : 'new'
+                  };
+              });
+
+              setFileList(prev => {
+                  const next = [...prev, ...newFiles];
+                  if (currentFileIndex === -1 && next.length > 0) {
+                      setTimeout(() => loadFile(0, next), 50);
+                  }
+                  return next;
+              });
+          } else {
+             // Fallback
+             fileInputRef.current?.click();
+          }
+      } catch (e: any) {
+          if (e.name !== 'AbortError') {
+            console.error("File Picker Error:", e);
+          }
+      }
+  };
+
+  const handleOpenFolder = async () => {
+      // Security Check for Remote HTTP
+      if (typeof (window as any).showDirectoryPicker === 'undefined') {
+          setNotification("Error: 'Open Folder' requires HTTPS or Localhost due to browser security policies.");
+          return;
+      }
+      try {
+          // @ts-ignore - File System Access API
+          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+          setProjectDirHandle(dirHandle);
+          
+          const files: any[] = [];
+          // @ts-ignore
+          for await (const entry of dirHandle.values()) {
+              if (entry.kind === 'file') {
+                  files.push({
+                      handle: entry,
+                      file: await entry.getFile()
+                  });
+              }
+          }
+          
+          const images = files.filter(x => x.file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(x.file.name));
+          const jsons = files.filter(x => x.file.name.endsWith('.json'));
+
+          const newFiles = images.map((imgItem: any) => {
+              const img = imgItem.file;
+              const baseName = img.name.substring(0, img.name.lastIndexOf('.'));
+              const matchingJsonItem = jsons.find((j: any) => j.file.name === `${baseName}.json` || j.file.name.startsWith(baseName));
+              
+              return {
+                  id: getId(),
+                  name: img.name,
+                  imgFile: img,
+                  jsonFile: matchingJsonItem?.file,
+                  jsonHandle: matchingJsonItem?.handle,
+                  data: null,
+                  status: matchingJsonItem ? 'annotated' : 'new'
+              };
+          });
+
+          setFileList(prev => {
+              const next = [...prev, ...newFiles];
+              if (currentFileIndex === -1 && next.length > 0) {
+                  setTimeout(() => loadFile(0, next), 50);
+              }
+              return next;
+          });
+      } catch (e: any) {
+          if (e.name !== 'AbortError') {
+            console.error("Folder Picker Error:", e);
+          }
+      }
+  };
+
   const handleFileUpload = (e: any) => {
     const files = Array.from(e.target.files as any[]);
     const images = files.filter(f => f.type.startsWith('image/'));
@@ -1123,6 +1523,7 @@ export default function App() {
             if (res) {
                 setNodes(res.nodes);
                 setEdges(res.edges);
+                if (res.extraData) setExtraTaskData(res.extraData);
                 if (res.warnings && res.warnings.length > 0) {
                     setNotification(`Loaded with Auto-Merges:\n${res.warnings.join('\n')}`);
                 }
@@ -1319,6 +1720,21 @@ export default function App() {
     newEdges.forEach(e => { degree.set(e.source, (degree.get(e.source)||0)+1); degree.set(e.target, (degree.get(e.target)||0)+1); });
     newNodes = newNodes.filter(n => n.type !== 'net_node' || (degree.get(n.id)||0) > 0);
 
+    // Data Consistency: Validate Net/Port relationships
+    // Checks if the net has valid pixels (edges) and if ports are physically connected
+    newNodes = newNodes.map(n => {
+        if (n.type === 'port' && n.data?.netName) {
+            const isConnected = newEdges.some(e => 
+                e.data?.netName === n.data.netName && 
+                (e.source === n.id || e.target === n.id)
+            );
+            if (!isConnected) {
+                return { ...n, data: { ...n.data, netName: undefined } };
+            }
+        }
+        return n;
+    });
+
     setNodes(newNodes); setEdges(newEdges); setSelectedIds(new Set());
   }, [selectedIds, nodes, edges, saveHistory, getConnectedEdges]);
 
@@ -1341,6 +1757,11 @@ export default function App() {
         else if (key === 'd') switchFile(1);
 
         // Edit Actions
+        else if (key === 'u') { 
+            e.preventDefault(); 
+            if (taskId) handleSaveToServer(); 
+            else downloadCurrentJson(); 
+        }
         else if (e.ctrlKey && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
         else if (e.ctrlKey && key === 'y') { e.preventDefault(); redo(); }
         else if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelected(e.ctrlKey); }
@@ -1357,7 +1778,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, dialog.isOpen, showSettings, connectStartId, currentFileIndex, fileList, nodes, edges, deleteSelected, mode]);
+  }, [undo, redo, dialog.isOpen, showSettings, connectStartId, currentFileIndex, fileList, nodes, edges, deleteSelected, mode, taskId, extraTaskData]);
 
   const screenToWorld = useCallback((sx: number, sy: number) => {
     if (!containerRef.current) return { x: 0, y: 0 };
@@ -1580,17 +2001,86 @@ export default function App() {
 
   const createConnection = (sourceId: any, targetId: any, netA: any, netB: any) => {
       saveHistory();
-      const finalNet = netA || netB || `net${Math.floor(Math.random()*10000)}`;
-      setEdges(prev => [...prev, { id: `edge_${getId()}`, source: sourceId, target: targetId, type: 'net_edge', data: { netName: finalNet } }]);
-            setNodes((prev: any[]) => prev.map(n => (n.id === sourceId || n.id === targetId) && !n.data.netName ? { ...n, data: { ...n.data, netName: finalNet } } : n));
+      
+      let finalNet = netA || netB;
+      
+      if (!finalNet) {
+          // Generate auto-increment net name: net1, net2, ...
+          const usedNames = new Set<string>();
+          nodes.forEach(n => { if (n.data?.netName) usedNames.add(n.data.netName); });
+          edges.forEach(e => { if (e.data?.netName) usedNames.add(e.data.netName); });
+          
+          let maxNum = 0;
+          usedNames.forEach(name => {
+              if (!name) return;
+              const match = name.match(/^net(\d+)$/i);
+              if (match) {
+                  const num = parseInt(match[1], 10);
+                  if (!isNaN(num) && num > maxNum) maxNum = num;
+              }
+          });
+          finalNet = `net${maxNum + 1}`;
+      }
+
+      const newEdgeId = `edge_${getId()}`;
+      const newEdge = { id: newEdgeId, source: sourceId, target: targetId, type: 'net_edge', data: { netName: finalNet } };
+
+      // Flood Fill: Propagate finalNet to all connected parts that are unnamed or same-named
+      const allEdges = [...edges, newEdge];
+      const adj = new Map();
+      allEdges.forEach(e => {
+          if (!adj.has(e.source)) adj.set(e.source, []);
+          if (!adj.has(e.target)) adj.set(e.target, []);
+          adj.get(e.source).push({ id: e.id, target: e.target, netName: e.data?.netName });
+          adj.get(e.target).push({ id: e.id, target: e.source, netName: e.data?.netName });
+      });
+
+      const nodesToUpdate = new Set([sourceId, targetId]);
+      const edgesToUpdate = new Set([newEdgeId]);
+      const queue = [sourceId, targetId];
+      const visited = new Set(queue);
+
+      while(queue.length > 0) {
+          const curr = queue.shift();
+          const neighbors = adj.get(curr) || [];
+          
+          neighbors.forEach((conn: any) => {
+              // Propagate if edge has no net or same net
+              if (!conn.netName || conn.netName === finalNet) {
+                  edgesToUpdate.add(conn.id);
+                  if (!visited.has(conn.target)) {
+                      visited.add(conn.target);
+                      nodesToUpdate.add(conn.target);
+                      queue.push(conn.target);
+                  }
+              }
+          });
+      }
+
+      setEdges(prev => [...prev, newEdge].map(e => edgesToUpdate.has(e.id) ? { ...e, data: { ...e.data, netName: finalNet } } : e));
+      setNodes((prev: any[]) => prev.map(n => nodesToUpdate.has(n.id) && (!n.data.netName || n.data.netName === finalNet) ? { ...n, data: { ...n.data, netName: finalNet } } : n));
   };
 
   const handleMergeConfirm = (netA: any, netB: any, sourceId: any, targetId: any) => {
       saveHistory();
       const newNetName = netA;
+      
+      // Update nodes belonging to netB to newNetName
       setNodes((prev: any[]) => prev.map(n => n.data.netName === netB ? { ...n, data: { ...n.data, netName: newNetName } } : n));
-      setEdges(prev => prev.map(e => e.data.netName === netB ? { ...e, data: { ...e.data, netName: newNetName } } : e));
-      setEdges(prev => [...prev, { id: `edge_${getId()}`, source: sourceId, target: targetId, type: 'net_edge', data: { netName: newNetName } }]);
+      
+      // Update edges belonging to netB to newNetName
+      // Also add the newly created connection edge
+      const newEdge = { id: `edge_${getId()}`, source: sourceId, target: targetId, type: 'net_edge', data: { netName: newNetName } };
+      
+      setEdges(prev => {
+          const updatedEdges = prev.map(e => e.data.netName === netB ? { ...e, data: { ...e.data, netName: newNetName } } : e);
+          return [...updatedEdges, newEdge];
+      });
+      
+      // Explicitly update source and target nodes if they don't have a netName yet (though merge implies they likely do)
+      // This ensures consistency if one side was a "net" but the specific node wasn't labeled
+      setNodes((prev: any[]) => prev.map(n => (n.id === sourceId || n.id === targetId) && (!n.data.netName || n.data.netName === netB) ? { ...n, data: { ...n.data, netName: newNetName } } : n));
+
       setDialog({ isOpen: false });
   };
 
@@ -1614,14 +2104,104 @@ export default function App() {
           const { x, y, w, h } = dialog.data;
           setNodes((prev: any[]) => [...prev, { id: `comp_${name}`, type: 'component', position: { x, y }, width: w, height: h, data: { label: name, type } }]);
       } else if (dialog.type === 'port') {
-          const { x, y, context } = dialog.data;
-          setNodes((prev: any[]) => [...prev, { id: getId(), type: 'port', position: { x, y }, parentId: context.type === 'int' ? context.parent.id : null, data: { label: name, isExternal: context.type === 'ext', compName: context.type === 'int' ? context.parent.data.label : 'ext' } }]);
-      }
+        const { x, y, context } = dialog.data;
+        
+        setNodes((prev: any[]) => {
+             let externalId: string | undefined = undefined;
+             // Calculate auto-increment externalId for external ports
+             if (context.type === 'ext') {
+                 const existingIds = prev
+                    .filter(n => n.type === 'port' && n.data.isExternal && n.data.externalId !== undefined)
+                    .map(n => {
+                        const s = String(n.data.externalId).replace('#', '');
+                        return parseInt(s, 10);
+                    })
+                    .filter(n => !isNaN(n));
+                 
+                 let nextId = 1;
+                 if (existingIds.length > 0) {
+                     nextId = Math.max(...existingIds) + 1;
+                 }
+                 externalId = `${nextId}`;
+             }
+
+             const newNode = { 
+                 id: getId(), 
+                 type: 'port', 
+                 position: { x, y }, 
+                 parentId: context.type === 'int' ? context.parent.id : null, 
+                 data: { 
+                     label: name, 
+                     type, 
+                     isExternal: context.type === 'ext', 
+                     compName: context.type === 'int' ? context.parent.data.label : 'ext',
+                     externalId 
+                 } 
+             };
+             return [...prev, newNode];
+        });
+    }
       setDialog({ isOpen: false, type: '', data: null });
   };
 
-  const downloadCurrentJson = () => {
-      const blob = new Blob([reactStateToPythonData(nodes)], {type:'application/json'});
+  const downloadCurrentJson = async () => {
+      const dataStr = reactStateToPythonData(nodes, edges, extraTaskData);
+      
+      const currentFile = fileList[currentFileIndex];
+      let handle = currentFile?.jsonHandle;
+
+      // Lazy creation logic: If no handle but we have a project directory, try to create one
+      if (!handle && projectDirHandle && currentFile) {
+          try {
+              const baseName = currentFile.name.substring(0, currentFile.name.lastIndexOf('.'));
+              const jsonName = `${baseName}.json`;
+              
+              // Create file handle
+              // @ts-ignore
+              handle = await projectDirHandle.getFileHandle(jsonName, { create: true });
+              
+              // Update fileList state to store this new handle for future saves
+              setFileList(prev => {
+                  const copy = [...prev];
+                  // Use finding by ID or Index to be safe, though index should be stable here
+                  if (copy[currentFileIndex]) {
+                      copy[currentFileIndex] = {
+                          ...copy[currentFileIndex],
+                          jsonHandle: handle,
+                          status: 'annotated'
+                      };
+                  }
+                  return copy;
+              });
+              
+          } catch (e) {
+              console.error("Failed to auto-create JSON file:", e);
+          }
+      }
+
+      if (handle) {
+          try {
+              // @ts-ignore - File System Access API
+              const writable = await handle.createWritable();
+              await writable.write(dataStr);
+              await writable.close();
+              setNotification("Saved to file successfully (Overwritten)!");
+              return;
+          } catch (e) {
+              console.error("Failed to save to handle:", e);
+              // Fallback to download if write fails
+              setNotification("Failed to overwrite file (Check permissions). Downloading instead.");
+          }
+      } else {
+        // Explicit notification if we are in download mode when the user might expect overwrite
+        if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+             setNotification("Note: Remote HTTP connections cannot overwrite local files. Downloading instead.");
+        } else {
+             setNotification("File saved (Downloaded)");
+        }
+      }
+
+      const blob = new Blob([dataStr], {type:'application/json'});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = (fileList[currentFileIndex]?.name.replace(/\.[^/.]+$/, "") || "circuit") + ".json";
@@ -1629,7 +2209,31 @@ export default function App() {
   };
 
   const filteredFiles = fileList.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
-  const singleSelected = selectedIds.size === 1 ? (nodes.find(n => n.id === [...selectedIds][0]) || edges.find(e => e.id === [...selectedIds][0])) : null;
+  const rawSingleSelected = selectedIds.size === 1 ? (nodes.find(n => n.id === [...selectedIds][0]) || edges.find(e => e.id === [...selectedIds][0])) : null;
+
+  // Check for Multi-Select Same Net (Whole Network Selection)
+  const selectedNetName = useMemo(() => {
+      if (selectedIds.size <= 1) return null;
+      let name: string | null = null;
+      const ids = Array.from(selectedIds);
+      
+      const firstItem = nodes.find(n => n.id === ids[0]) || edges.find(e => e.id === ids[0]);
+      if (!firstItem?.data?.netName) return null;
+      name = firstItem.data.netName;
+
+      for (let i = 1; i < ids.length; i++) {
+          const item = nodes.find(n => n.id === ids[i]) || edges.find(e => e.id === ids[i]);
+          if (item?.data?.netName !== name) return null;
+      }
+      return name;
+  }, [selectedIds, nodes, edges]);
+
+  const singleSelected = rawSingleSelected || (selectedNetName ? {
+      id: [...selectedIds][0], // Use one valid ID for operations like rename
+      type: 'net_edge',
+      data: { netName: selectedNetName },
+      position: { x: 0, y: 0 }
+  } : null);
 
   return (
     <div className="flex flex-col h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans overflow-hidden transition-colors duration-200">
@@ -1670,8 +2274,8 @@ export default function App() {
                     <span>Settings</span>
                 </button>
 
-                <button onClick={downloadCurrentJson} disabled={currentFileIndex===-1} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-md text-sm font-bold flex items-center gap-2 transition-colors shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                    <Save size={16}/> SAVE JSON
+                <button onClick={taskId ? handleSaveToServer : downloadCurrentJson} disabled={currentFileIndex===-1 && !taskId} className={`${taskId ? 'bg-orange-600 hover:bg-orange-500 shadow-orange-900/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'} text-white px-4 py-2 rounded-md text-sm font-bold flex items-center gap-2 transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed`}>
+                    <Save size={16}/> {taskId ? "SAVE & RETURN ( U )" : "SAVE JSON ( U )"}
                 </button>
             </div>
         </div>
@@ -1688,9 +2292,14 @@ export default function App() {
                     </div>
                     
                     <div className="p-3 border-b border-slate-200 dark:border-slate-800 space-y-2 transition-colors">
-                        <button onClick={() => fileInputRef.current?.click()} className="w-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-1.5 rounded border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium transition-colors">
-                            <Plus size={14}/> Add Files
-                        </button>
+                        <div className="flex gap-2">
+                            <button onClick={handleAddFilesWithPicker} className="flex-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-1.5 rounded border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium transition-colors">
+                                <Plus size={14}/> Add Files
+                            </button>
+                            <button onClick={handleOpenFolder} className="flex-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 py-1.5 rounded border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2 text-xs font-medium transition-colors">
+                                <FolderOpen size={14}/> Open Folder
+                            </button>
+                        </div>
                         <input ref={fileInputRef} type="file" multiple accept="image/*,.json" className="hidden" onChange={handleFileUpload} />
                         <div className="relative">
                             <Search size={12} className="absolute left-2.5 top-2 text-slate-400 dark:text-slate-500"/>
@@ -1761,15 +2370,15 @@ export default function App() {
                                                 return (
                                                  <div key={p.id} className="flex flex-col gap-1 mb-2">
                                                      <div className="flex gap-2">
-                                                         <AutocompleteInput 
-                                                            className={`flex-1 bg-slate-800 border rounded px-1.5 py-0.5 text-xs text-slate-300 outline-none focus:border-blue-500 ${hasConflict ? 'border-red-500/50 bg-red-900/10 text-red-300' : 'border-slate-700'}`} 
-                                                            options={uniquePortNames}
+                                                        <AutocompleteInput 
+                                                           className={`flex-1 bg-slate-50 dark:bg-slate-800 border rounded px-1.5 py-0.5 text-xs text-slate-700 dark:text-slate-300 outline-none focus:border-blue-500 ${hasConflict ? 'border-red-500/50 bg-red-900/10 text-red-300' : 'border-slate-200 dark:border-slate-700'}`} 
+                                                           options={uniquePortNames}
                                                             onFocus={(e: any) => e.target.select()}
                                                             value={p.data.label} 
-                                                            onChange={(v: any) => { saveHistory(); setNodes((prev: any[]) => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
-                                                         />
-                                                         <input className="w-16 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-300 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={p.data.type||''} placeholder="Type" onChange={e => { saveHistory(); const v=e.target.value; setNodes((prev: any[]) => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, type: v } } : n)); }}/>
-                                                     </div>
+                                                           onChange={(v: any) => { saveHistory(); setNodes((prev: any[]) => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, label: v } } : n)); }}
+                                                        />
+                                                        <input className="w-16 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-700 dark:text-slate-300 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" value={p.data.type||''} placeholder="Type" onChange={e => { saveHistory(); const v=e.target.value; setNodes((prev: any[]) => prev.map(n => n.id === p.id ? { ...n, data: { ...n.data, type: v } } : n)); }}/>
+                                                    </div>
                                                      {hasConflict && <div className="text-[9px] text-red-400 flex items-center gap-1"><AlertTriangle size={10}/> Net Conflict Detected</div>}
                                                  </div>
                                                 );
@@ -1816,7 +2425,7 @@ export default function App() {
                                     <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-200 dark:border-slate-800">
                                         <Network size={16} className="text-slate-400"/>
                                         <span className="text-xs font-bold text-slate-300">
-                                           {singleSelected.type === 'net_edge' ? 'Wire Segment' : (singleSelected.type === 'port' ? 'Port' : 'Net Node')}
+                                           {singleSelected.type === 'net_edge' ? 'Wire Segment' : (singleSelected.type === 'port' ? (singleSelected.data.isExternal ? 'External_Port' : 'Port') : 'Net Node')}
                                         </span>
                                     </div>
                                     
@@ -1848,9 +2457,9 @@ export default function App() {
                                      <div>
                                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Net Name</label>
                                          <div className="flex gap-2">
-                                            <input className={`w-full bg-slate-800 border rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600 ${conflicts.has(singleSelected.id) ? 'border-red-500/50 bg-red-900/10' : 'border-slate-700'}`} 
+                                            <input className={`w-full bg-slate-50 dark:bg-slate-800 border rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600 ${conflicts.has(singleSelected.id) ? 'border-red-500/50 bg-red-900/10' : 'border-slate-200 dark:border-slate-700'}`} 
                                                 value={singleSelected.data?.netName || ''} 
-                                                onChange={e => { 
+                                                onChange={e => {  
                                                     saveHistory(); 
                                                     const v = e.target.value;
                                                     if (singleSelected.type === 'net_edge') {
@@ -1890,10 +2499,12 @@ export default function App() {
                                          </div>
                                      )}
 
-                                     <div className="grid grid-cols-2 gap-2 mt-4">
-                                        <button onClick={() => deleteSelected(false)} className="py-2 bg-slate-800 text-slate-400 rounded text-[10px] font-bold hover:bg-slate-700 flex justify-center gap-1 border border-slate-700"><Trash2 size={12}/> Del Segment</button>
-                                        <button onClick={() => deleteSelected(true)} className="py-2 bg-red-900/20 text-red-400 rounded text-[10px] font-bold hover:bg-red-100 dark:hover:bg-red-900/40 flex justify-center gap-1 border border-red-900/50"><Trash2 size={12}/> Del Net</button>
-                                     </div>
+                                    <div className="grid grid-cols-2 gap-2 mt-4">
+                                       {!selectedNetName && (
+                                           <button onClick={() => deleteSelected(false)} className="py-2 bg-slate-800 text-slate-400 rounded text-[10px] font-bold hover:bg-slate-700 flex justify-center gap-1 border border-slate-700"><Trash2 size={12}/> Del Segment</button>
+                                       )}
+                                       <button onClick={() => deleteSelected(true)} className={`py-2 bg-red-900/20 text-red-400 rounded text-[10px] font-bold hover:bg-red-100 dark:hover:bg-red-900/40 flex justify-center gap-1 border border-red-900/50 ${selectedNetName ? 'col-span-2' : ''}`}><Trash2 size={12}/> Del Net</button>
+                                    </div>
                                  </div>
                              )
                          ) : (
@@ -2006,7 +2617,7 @@ export default function App() {
                                     <div key={n.id} className={`absolute rounded-full border border-white shadow-sm z-20 flex items-center justify-center transition-transform ${sel ? 'scale-150 ring-2 ring-blue-500' : ''} ${isConflict ? 'animate-pulse ring-2 ring-red-500' : ''}`}
                                         style={{ left: n.position.x, top: n.position.y, width: isNet?8:10, height: isNet?8:10, backgroundColor: sel?'#FFD700':bg, transform: 'translate(-50%,-50%)' }}>
                                         {isConflict && !isNet && <div className="absolute -top-6 -right-6 text-red-600 bg-white rounded-full p-0.5 shadow-sm"><AlertTriangle size={12}/></div>}
-                                        {!hideAll && !isNet && (showPorts || (n.parentId && selectedIds.has(n.parentId))) && (
+                                        {!hideAll && !isNet && (showPorts || n.data.isExternal || (n.parentId && selectedIds.has(n.parentId))) && (
                                             <div className="absolute left-2.5 -top-5 bg-indigo-600 text-white text-[9px] px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap z-50 pointer-events-none border border-indigo-400/50">
                                                 {n.data.label}
                                             </div>
@@ -2021,9 +2632,20 @@ export default function App() {
                                 style={{ left: l.x, top: l.y, transform: 'translate(-50%,-50%)', borderColor: stringToColor(l.name), color: stringToColor(l.name) }}
                                 onClick={(e) => { 
                                     e.stopPropagation(); 
-                                    const edgeToSelect = edges.find(ed => ed.id === l.edgeId);
-                                    if (edgeToSelect) {
-                                        setSelectedIds(new Set([edgeToSelect.id]));
+                                    // Find all edges and nodes belonging to this net
+                                    const netEdges = edges.filter(ed => ed.data?.netName === l.name);
+                                    const netNodes = nodes.filter(n => n.type === 'net_node' && n.data?.netName === l.name);
+                                    
+                                    const ids = new Set([...netEdges.map(e => e.id), ...netNodes.map(n => n.id)]);
+
+                                    // Fallback: use edgeId from label if no explicit netName matches found (shouldn't happen if l.name comes from netName)
+                                    if (ids.size === 0 && l.edgeId) {
+                                         const edgeToSelect = edges.find(ed => ed.id === l.edgeId);
+                                         if (edgeToSelect) ids.add(edgeToSelect.id);
+                                    }
+
+                                    if (ids.size > 0) {
+                                        setSelectedIds(ids);
                                         if (mode !== MODE.VIEW) setMode(MODE.VIEW);
                                     }
                                 }}>

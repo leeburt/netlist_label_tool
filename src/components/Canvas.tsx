@@ -114,8 +114,8 @@ const CanvasInner = () => {
             event.stopPropagation();
             const { x, y } = reactFlowInstance.screenToFlowPosition({ x: event.clientX, y: event.clientY });
             const name = `P${Date.now().toString().slice(-4)}`;
-            // Pass absolute coordinate, store handles relative logic
-            addPort({ x, y }, node.id, name);
+            // Pass absolute coordinate, store handles relative logic and semantic rule
+            addPort({ x, y }, undefined, name);
         } else if (mode === 'CONNECT') {
             event.stopPropagation();
             // Click-Click Connection Logic

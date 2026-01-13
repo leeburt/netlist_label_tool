@@ -181,9 +181,14 @@ const Sidebar = () => {
                                     />
                                 </div>
                             )}
-                            <div className="text-xs text-gray-500 mt-1">
-                                所属: {selectedNode.data.isExternal ? "外部端口" : (selectedNode.data.componentName || "未知组件")}
-                            </div>
+                           <div className="text-xs text-gray-500 mt-1">
+                               所属: {selectedNode.data.isExternal ? "External_Port" : (selectedNode.data.componentName || "未知组件")}
+                           </div>
+                           {selectedNode.data.isExternal && selectedNode.data.externalId && (
+                               <div className="text-xs text-gray-400 mt-0.5">
+                                   ID: {selectedNode.data.externalId}
+                               </div>
+                           )}
                          </>
                      )}
 

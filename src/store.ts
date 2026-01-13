@@ -39,6 +39,7 @@ export interface AppState {
   
   addComponent: (box: { x: number; y: number; w: number; h: number }, name: string, type?: string) => void;
   addPort: (coord: { x: number; y: number }, parentId?: string, name?: string, type?: string) => void;
+  removePort: (id: string) => void;
   deleteSelection: () => void;
   
   updateNodeLabel: (id: string, label: string) => void;
@@ -263,6 +264,8 @@ const useStore = create<AppState>((set, get) => ({
         style: { stroke: '#00cc00', strokeWidth: 2 }
     });
 
+    let activeJunctionId: string | null = null;
+
     if (jIdA && jIdB) {
         if (jIdA === jIdB) return; // Already same network
         // Merge Networks: Move all edges from J2 (B) to J1 (A)
@@ -273,14 +276,15 @@ const useStore = create<AppState>((set, get) => ({
         });
         // Remove J2
         newNodes = newNodes.filter(n => n.id !== jIdB);
-        // Recalculate J1 Position will happen on next move or we can trigger it immediately? 
-        // Ideally trigger immediate update. For simplicity, we just merge.
+        activeJunctionId = jIdA;
     } else if (jIdA) {
         // Connect B to existing J1
         newEdges.push(createEdge(targetId, jIdA));
+        activeJunctionId = jIdA;
     } else if (jIdB) {
         // Connect A to existing J2
         newEdges.push(createEdge(sourceId, jIdB));
+        activeJunctionId = jIdB;
     } else {
         // New Network: Create J, Connect A->J, B->J
         const jId = uuidv4();
@@ -312,6 +316,60 @@ const useStore = create<AppState>((set, get) => ({
 
         newEdges.push(createEdge(sourceId, jId));
         newEdges.push(createEdge(targetId, jId));
+        activeJunctionId = jId;
+    }
+
+    // --- NET NAME PROPAGATION ---
+    if (activeJunctionId) {
+        const connectedNodeIds = new Set<string>();
+        const queue = [activeJunctionId];
+        connectedNodeIds.add(activeJunctionId);
+        const existingNames = new Set<string>();
+
+        let head = 0;
+        while(head < queue.length){
+            const curr = queue[head++];
+            newEdges.forEach(e => {
+                let neighbor = null;
+                if (e.source === curr) neighbor = e.target;
+                else if (e.target === curr) neighbor = e.source;
+                
+                if (neighbor && !connectedNodeIds.has(neighbor)) {
+                    connectedNodeIds.add(neighbor);
+                    queue.push(neighbor);
+                }
+            });
+        }
+
+        connectedNodeIds.forEach(nid => {
+            const node = newNodes.find(n => n.id === nid);
+            if (node?.data?.netName) existingNames.add(node.data.netName);
+        });
+
+        // Pick name: prefer one that exists
+        let winnerName: string | undefined = undefined;
+        if (existingNames.size > 0) {
+            winnerName = Array.from(existingNames).sort()[0]; 
+        } else {
+            // Generate a new name if none exists
+            winnerName = `Net_${Date.now().toString().slice(-6)}`;
+        }
+
+        // Apply to all
+        if (winnerName) {
+            newNodes = newNodes.map(n => {
+                if (connectedNodeIds.has(n.id) && n.data?.netName !== winnerName) {
+                    return { ...n, data: { ...n.data, netName: winnerName } };
+                }
+                return n;
+            });
+            newEdges = newEdges.map(e => {
+                 if (connectedNodeIds.has(e.source) && connectedNodeIds.has(e.target)) {
+                     return { ...e, data: { ...e.data, netName: winnerName } };
+                 }
+                 return e;
+            });
+        }
     }
 
     set({ nodes: newNodes, edges: newEdges });
@@ -331,11 +389,30 @@ const useStore = create<AppState>((set, get) => ({
     set({ nodes: [...nodes, newNode] });
   },
 
-  addPort: (coord, parentId, name, type = '') => {
+  addPort: (coord, _parentId, name, type = '') => {
     const { nodes, saveHistory } = get();
     saveHistory();
     const pName = name || `P${nodes.length}`;
     
+    // 1. Semantic Rule: Determine Parent by Geometry
+    // We ignore _parentId (unless we want to support forced override, but user said "rule: if inside -> internal")
+    let parentId: string | undefined = undefined;
+    
+    // Find component containing this point
+    // Nodes are top-level or children. Components are usually top-level.
+    const components = nodes.filter(n => n.type === 'component');
+    for (const comp of components) {
+        const x = comp.position.x;
+        const y = comp.position.y;
+        const w = Number(comp.style?.width) || 0;
+        const h = Number(comp.style?.height) || 0;
+        
+        if (coord.x >= x && coord.x <= x + w && coord.y >= y && coord.y <= y + h) {
+            parentId = comp.id;
+            break; // Found the component
+        }
+    }
+
     let position = { x: coord.x, y: coord.y };
     // If we have a parent (Component), store relative coordinates
     if (parentId) {
@@ -358,7 +435,64 @@ const useStore = create<AppState>((set, get) => ({
       // Style is handled by CustomNode, but we can set default dims here for hit testing
       style: { width: parentId ? 10 : 20, height: parentId ? 10 : 20 } 
     };
+
+    if (!parentId) {
+        // Generate externalId for external ports
+        const existingIds = nodes
+            .filter(n => n.data.isExternal && n.data.externalId !== undefined)
+            .map(n => {
+                const s = String(n.data.externalId).replace('#', '');
+                return parseInt(s, 10);
+            })
+            .filter(n => !isNaN(n));
+            
+        let nextId = 1; // Default start from 1
+        if (existingIds.length > 0) {
+            nextId = Math.max(...existingIds) + 1;
+        }
+        newNode.data.externalId = nextId.toString();
+        // If name wasn't provided, maybe default to P{id}? 
+        // Logic above set pName = name || `P${nodes.length}`. 
+        // We can keep pName as label.
+    }
+
     set({ nodes: [...nodes, newNode] });
+  },
+
+  removePort: (id: string) => {
+      const { nodes, edges, saveHistory } = get();
+      saveHistory();
+      
+      const nodeToRemove = nodes.find(n => n.id === id);
+      if (!nodeToRemove) return;
+
+      // 1. Identify Edges to Remove
+      const edgesToRemove = new Set<string>();
+      edges.forEach(e => {
+          if (e.source === id || e.target === id) edgesToRemove.add(e.id);
+      });
+      
+      // 2. Filter Nodes and Edges
+      let finalNodes = nodes.filter(n => n.id !== id);
+      let finalEdges = edges.filter(e => !edgesToRemove.has(e.id));
+      
+      // 3. Cleanup Junctions (if they have < 2 connections)
+      const junctions = finalNodes.filter(n => n.type === 'junction');
+      const junctionIdsToRemove = new Set<string>();
+      
+      junctions.forEach(j => {
+          const connectedCount = finalEdges.filter(e => e.source === j.id || e.target === j.id).length;
+          if (connectedCount < 2) {
+              junctionIdsToRemove.add(j.id);
+          }
+      });
+      
+      if (junctionIdsToRemove.size > 0) {
+          finalNodes = finalNodes.filter(n => !junctionIdsToRemove.has(n.id));
+          finalEdges = finalEdges.filter(e => !junctionIdsToRemove.has(e.source) && !junctionIdsToRemove.has(e.target));
+      }
+
+      set({ nodes: finalNodes, edges: finalEdges });
   },
 
   deleteSelection: () => {
@@ -521,124 +655,227 @@ const useStore = create<AppState>((set, get) => ({
         const newNodes: Node[] = [];
         const newEdges: Edge[] = [];
         
-        // ... (Previous loadJson logic was mostly correct, let's keep it but ensure IDs match)
-        // I will copy the previous logic here but refined.
-        
-        // 1. Components
-        Object.entries(data.components || {}).forEach(([name, comp]: [string, any]) => {
-            const box = comp.box; 
-            const x = Math.min(box[0], box[2]);
-            const y = Math.min(box[1], box[3]);
-            const w = Math.abs(box[2] - box[0]);
-            const h = Math.abs(box[3] - box[1]);
-            const compId = uuidv4(); 
+        // Preserve existing background image
+        const { nodes: currentNodes } = get();
+        const imgNode = currentNodes.find(n => n.type === 'image');
+        if (imgNode) newNodes.push(imgNode);
+
+        if (data.ckt_netlist) {
+            // === NEW FORMAT (netlist.json) ===
             
-            newNodes.push({
-                id: compId,
-                type: 'component',
-                position: { x, y },
-                style: { width: w, height: h },
-                data: { label: name, type: comp.type, originalName: name }
+            // 1. Components
+            data.ckt_netlist.forEach((comp: any) => {
+                 const bbox = comp.bbox; 
+                 const x = bbox.top_left[0];
+                 const y = bbox.top_left[1];
+                 const w = bbox.bottom_right[0] - x;
+                 const h = bbox.bottom_right[1] - y;
+                 const compId = uuidv4();
+                 
+                 newNodes.push({
+                    id: compId,
+                    type: 'component',
+                    position: { x, y },
+                    style: { width: w, height: h },
+                    data: { label: comp.device_name, type: comp.component_type, originalName: comp.device_name }
+                 });
+
+                 // Ports
+                 Object.entries(comp.port || {}).forEach(([pName, pInfo]: [string, any]) => {
+                      const pCenter = pInfo.center;
+                      const portSize = 10;
+                      // Relative Top-Left = Center - ParentTL - Radius
+                      const px = pCenter[0] - x - (portSize / 2);
+                      const py = pCenter[1] - y - (portSize / 2);
+                      
+                      newNodes.push({
+                          id: uuidv4(),
+                          type: 'port',
+                          parentNode: compId,
+                          position: { x: px, y: py },
+                          data: { label: pName, componentName: comp.device_name, portName: pName, isExternal: false },
+                          style: { width: portSize, height: portSize }
+                      });
+                 });
             });
 
-            (comp.ports || []).forEach((p: any) => {
-                 const portSize = 10;
-                 const px = p.coord[0] - x - (portSize / 2);
-                 const py = p.coord[1] - y - (portSize / 2);
+            // 2. External Ports
+            Object.entries(data.external_ports || {}).forEach(([key, info]: [string, any]) => {
+                const portSize = 20;
+                const radius = portSize / 2;
+                const center = info.center;
+                const extIdStr = key.replace('#', '');
+                
+                newNodes.push({
+                    id: uuidv4(),
+                    type: 'port',
+                    position: { x: center[0] - radius, y: center[1] - radius },
+                    data: { label: info.name, isExternal: true, type: info.type || "", externalId: extIdStr },
+                    style: { width: portSize, height: portSize }
+                });
+            });
+
+            // 3. Connections
+            Object.entries(data.connection || {}).forEach(([netName, netData]: [string, any]) => {
+                const netPorts = netData.ports || [];
+                const portNodeIds: string[] = [];
+                
+                netPorts.forEach(([devName, pName]: [string, string]) => {
+                     const comp = newNodes.find(n => n.type === 'component' && n.data.label === devName);
+                     if (comp) {
+                         const pNode = newNodes.find(n => n.parentNode === comp.id && n.data.label === pName);
+                         if (pNode) portNodeIds.push(pNode.id);
+                     }
+                });
+                
+                // Match external ports by name = netName
+                const extPortNode = newNodes.find(n => n.type === 'port' && n.data.isExternal && n.data.label === netName);
+                if (extPortNode) portNodeIds.push(extPortNode.id);
+                
+                if (portNodeIds.length >= 2) {
+                    // Calculate centroid
+                    let sumX = 0, sumY = 0;
+                    portNodeIds.forEach(pid => {
+                        const p = newNodes.find(n => n.id === pid)!;
+                        let px = p.position.x + (Number(p.style?.width)/2);
+                        let py = p.position.y + (Number(p.style?.height)/2);
+                        if (p.parentNode) {
+                            const par = newNodes.find(n => n.id === p.parentNode)!;
+                            px += par.position.x;
+                            py += par.position.y;
+                        }
+                        sumX += px; sumY += py;
+                    });
+                    
+                    const jId = uuidv4();
+                    const cx = sumX / portNodeIds.length;
+                    const cy = sumY / portNodeIds.length;
+                    
+                    newNodes.push({
+                        id: jId,
+                        type: 'junction',
+                        position: { x: cx - 4, y: cy - 4 },
+                        data: { netName },
+                        style: { width: 8, height: 8 }
+                    });
+                    
+                    portNodeIds.forEach(pid => {
+                        newEdges.push({
+                            id: uuidv4(),
+                            source: pid,
+                            target: jId,
+                            type: 'straight',
+                            style: { stroke: '#00cc00', strokeWidth: 2 },
+                            data: { netName }
+                        });
+                        
+                        const p = newNodes.find(n => n.id === pid)!;
+                        if (p.data) p.data.netName = netName;
+                    });
+                }
+            });
+
+        } else {
+            // === OLD FORMAT ===
+            Object.entries(data.components || {}).forEach(([name, comp]: [string, any]) => {
+                const box = comp.box; 
+                const x = Math.min(box[0], box[2]);
+                const y = Math.min(box[1], box[3]);
+                const w = Math.abs(box[2] - box[0]);
+                const h = Math.abs(box[3] - box[1]);
+                const compId = uuidv4();
+                
+                newNodes.push({
+                    id: compId,
+                    type: 'component',
+                    position: { x, y },
+                    style: { width: w, height: h },
+                    data: { label: name, type: comp.type, originalName: name }
+                });
+
+                (comp.ports || []).forEach((p: any) => {
+                    const portSize = 10;
+                    const px = p.coord[0] - x - (portSize / 2);
+                    const py = p.coord[1] - y - (portSize / 2);
+                    newNodes.push({
+                        id: uuidv4(),
+                        type: 'port',
+                        parentNode: compId,
+                        position: { x: px, y: py },
+                        data: { label: p.name, componentName: name, portName: p.name, isExternal: false, type: p.type || "" },
+                        style: { width: portSize, height: portSize }
+                    });
+                });
+            });
+
+            Object.entries(data.external_ports || {}).forEach(([key, info]: [string, any]) => {
+                 const portSize = 20;
+                 const coord = info.coord || info.center || [0, 0];
+                 const label = info.name || key;
+                 const externalId = key;
                  newNodes.push({
                      id: uuidv4(),
                      type: 'port',
-                     parentNode: compId,
-                     position: { x: px, y: py },
-                     data: { label: p.name, componentName: name, portName: p.name, isExternal: false },
+                     position: { x: coord[0] - 10, y: coord[1] - 10 },
+                     data: { label: label, isExternal: true, type: info.type || "", externalId: externalId },
                      style: { width: portSize, height: portSize }
                  });
             });
-        });
 
-        // 2. External Ports
-        Object.entries(data.external_ports || {}).forEach(([name, info]: [string, any]) => {
-             const portSize = 20;
-             const radius = portSize / 2;
-             newNodes.push({
-                 id: uuidv4(),
-                 type: 'port',
-                 position: { x: info.coord[0] - radius, y: info.coord[1] - radius },
-                 data: { label: name, isExternal: true, type: info.type || "" },
-                 style: { width: portSize, height: portSize }
-             });
-        });
+            const findPortId = (compName: string, portIdentifier: string) => {
+                if (compName === 'external') {
+                    let node = newNodes.find(n => n.data.isExternal && n.data.externalId === portIdentifier);
+                    if (!node) node = newNodes.find(n => n.data.isExternal && n.data.label === portIdentifier);
+                    return node?.id;
+                } else {
+                    const comp = newNodes.find(n => n.type === 'component' && n.data.originalName === compName);
+                    if (!comp) return null;
+                    return newNodes.find(n => n.parentNode === comp.id && n.data.label === portIdentifier)?.id;
+                }
+            };
 
-        // 3. Connections
-        const findPortId = (compName: string, portName: string) => {
-            if (compName === 'external') {
-                return newNodes.find(n => n.data.label === portName && n.data.isExternal)?.id;
-            } else {
-                const comp = newNodes.find(n => n.type === 'component' && n.data.originalName === compName);
-                if (!comp) return null;
-                return newNodes.find(n => n.parentNode === comp.id && n.data.label === portName)?.id;
-            }
-        };
-
-        (data.connections || []).forEach((conn: any) => {
-            const junctionId = uuidv4();
-            let sumX = 0, sumY = 0, count = 0;
-            const validPortIds: string[] = [];
-            
-            conn.nodes.forEach((n: any) => {
-                 const pid = findPortId(n.component, n.port);
-                 if (pid) {
-                     validPortIds.push(pid);
-                     const pNode = newNodes.find(node => node.id === pid);
-                     if (pNode) {
-                         let px = pNode.position.x;
-                         let py = pNode.position.y;
-                         const pSize = pNode.style?.width as number || 10;
-                         const pRadius = pSize / 2;
-                         
-                         // Position is Top-Left. We need Center.
-                         px += pRadius;
-                         py += pRadius;
-                         
+            (data.connections || []).forEach((conn: any) => {
+                const junctionId = uuidv4();
+                let sumX = 0, sumY = 0, count = 0;
+                const validPortIds: string[] = [];
+                
+                conn.nodes.forEach((n: any) => {
+                     const pid = findPortId(n.component, n.port);
+                     if (pid) {
+                         validPortIds.push(pid);
+                         const pNode = newNodes.find(node => node.id === pid)!;
+                         let px = pNode.position.x + (Number(pNode.style?.width)/2);
+                         let py = pNode.position.y + (Number(pNode.style?.height)/2);
                          if (pNode.parentNode) {
                              const parent = newNodes.find(pn => pn.id === pNode.parentNode);
                              if (parent) { px += parent.position.x; py += parent.position.y; }
                          }
                          sumX += px; sumY += py; count++;
                      }
-                 }
-            });
+                });
 
-            if (count > 0 && validPortIds.length >= 2) {
-                 const jSize = 8;
-                 const jRadius = jSize / 2;
-                 newNodes.push({
-                     id: junctionId,
-                     type: 'junction',
-                     position: { x: (sumX / count) - jRadius, y: (sumY / count) - jRadius },
-                     data: {},
-                     style: { width: jSize, height: jSize }
-                 });
-                 
-                 validPortIds.forEach(pid => {
-                     newEdges.push({
-                         id: uuidv4(),
-                         source: pid,
-                         target: junctionId,
-                         type: 'straight',
-                         style: { stroke: '#00cc00', strokeWidth: 2 }
+                if (count > 0 && validPortIds.length >= 2) {
+                     newNodes.push({
+                         id: junctionId,
+                         type: 'junction',
+                         position: { x: (sumX / count) - 4, y: (sumY / count) - 4 },
+                         data: {},
+                         style: { width: 8, height: 8 }
                      });
-                 });
-            }
-        });
-
-        // Preserve existing background image node if it exists
-        const { nodes: currentNodes } = get();
-        const imgNode = currentNodes.find(n => n.type === 'image');
-        if (imgNode) {
-            newNodes.unshift(imgNode);
+                     
+                     validPortIds.forEach(pid => {
+                         newEdges.push({
+                             id: uuidv4(),
+                             source: pid,
+                             target: junctionId,
+                             type: 'straight',
+                             style: { stroke: '#00cc00', strokeWidth: 2 }
+                         });
+                     });
+                }
+            });
         }
-
+        
         set({ nodes: newNodes, edges: newEdges, history: [] });
     } catch (e) {
         console.error("Failed to load JSON", e);
@@ -647,74 +884,214 @@ const useStore = create<AppState>((set, get) => ({
 
   exportJson: () => {
       const { nodes, edges } = get();
-      const output = {
-          components: {} as any,
-          external_ports: {} as any,
-          connections: [] as any
-      };
-      
-      nodes.filter(n => n.type === 'component').forEach(c => {
-           const box = [
-               Math.round(c.position.x), 
-               Math.round(c.position.y), 
-               Math.round(c.position.x + (Number(c.style?.width) || 0)), 
-               Math.round(c.position.y + (Number(c.style?.height) || 0))
-           ];
-           
-           const ports = nodes.filter(n => n.parentNode === c.id).map(p => {
-               const pSize = Number(p.style?.width) || 10;
-               const radius = pSize / 2;
-               return {
-                   name: p.data.label,
-                   coord: [
-                       Math.round(c.position.x + p.position.x + radius),
-                       Math.round(c.position.y + p.position.y + radius)
-                   ]
-               };
-           });
-           
-           output.components[c.data.label] = {
-               type: c.data.type || "",
-               box: box,
-               ports: ports
-           };
-      });
 
-      nodes.filter(n => n.type === 'port' && !n.parentNode).forEach(p => {
-          const pSize = Number(p.style?.width) || 20;
-          const radius = pSize / 2;
-          output.external_ports[p.data.label] = {
-              type: p.data.type || "external", 
-              coord: [Math.round(p.position.x + radius), Math.round(p.position.y + radius)]
+      // Helper: Get Absolute Position and Center
+      const getAbsGeometry = (nodeId: string) => {
+          const node = nodes.find(n => n.id === nodeId);
+          if (!node) return { tl: [0, 0], br: [0, 0], center: [0, 0] };
+          
+          let x = node.position.x;
+          let y = node.position.y;
+          const w = Number(node.style?.width) || 0;
+          const h = Number(node.style?.height) || 0;
+
+          if (node.parentNode) {
+              const parent = nodes.find(p => p.id === node.parentNode);
+              if (parent) {
+                  x += parent.position.x;
+                  y += parent.position.y;
+              }
+          }
+          
+          return {
+              tl: [Math.round(x), Math.round(y)],
+              br: [Math.round(x + w), Math.round(y + h)],
+              center: [Math.round(x + w / 2), Math.round(y + h / 2)]
           };
+      };
+
+      // 1. Group Edges and Ports into Nets
+      const nets = new Map<string, { ports: string[], edges: string[] }>();
+      const visitedEdges = new Set<string>();
+      
+      const adjacency = new Map<string, string[]>(); 
+      edges.forEach(e => {
+          if (!adjacency.has(e.source)) adjacency.set(e.source, []);
+          if (!adjacency.has(e.target)) adjacency.set(e.target, []);
+          adjacency.get(e.source)!.push(e.id);
+          adjacency.get(e.target)!.push(e.id);
       });
 
-      nodes.filter(n => n.type === 'junction').forEach(j => {
-           const connectedEdges = edges.filter(e => e.source === j.id || e.target === j.id);
-           const connNodes: any[] = [];
-           
-           connectedEdges.forEach(e => {
-               const otherId = e.source === j.id ? e.target : e.source;
-                     const node = nodes.find(n => n.id === otherId);
-               if (node && node.type === 'port') {
-                   // Calculate center coordinate for export
-                   // const pSize = Number(node.style?.width) || 10;
-                   // const radius = pSize / 2;
-                   
-                   if (node.parentNode) {
-                       const parent = nodes.find(p => p.id === node.parentNode);
-                       if (parent) {
-                           connNodes.push({ component: parent.data.label, port: node.data.label });
+      let netCounter = 0;
+      const visitedNodes = new Set<string>();
+
+      nodes.forEach(rootNode => {
+          if ((rootNode.type === 'port' || rootNode.type === 'junction') && !visitedNodes.has(rootNode.id)) {
+              const currentNetPorts: string[] = [];
+              const currentNetEdges: string[] = [];
+              const currentNetNodes: string[] = [];
+              
+              const queue = [rootNode.id];
+              visitedNodes.add(rootNode.id);
+              currentNetNodes.push(rootNode.id);
+              if (rootNode.type === 'port') currentNetPorts.push(rootNode.id);
+
+              let head = 0;
+              while (head < queue.length) {
+                  const currId = queue[head++];
+                  const edgeIds = adjacency.get(currId) || [];
+                  
+                  edgeIds.forEach(eid => {
+                      if (!visitedEdges.has(eid)) {
+                          visitedEdges.add(eid);
+                          currentNetEdges.push(eid);
+                          
+                          const edge = edges.find(e => e.id === eid);
+                          if (edge) {
+                              const neighborId = edge.source === currId ? edge.target : edge.source;
+                              if (!visitedNodes.has(neighborId)) {
+                                  visitedNodes.add(neighborId);
+                                  queue.push(neighborId);
+                                  currentNetNodes.push(neighborId);
+                                  const n = nodes.find(no => no.id === neighborId);
+                                  if (n?.type === 'port') currentNetPorts.push(neighborId);
+                              }
+                          }
+                      }
+                  });
+              }
+
+              if (currentNetPorts.length > 0 || currentNetEdges.length > 0) {
+                  // Determine Net Name
+                  let netName = "";
+                  const names = new Set<string>();
+                  
+                  currentNetNodes.forEach(nid => {
+                      const n = nodes.find(no => no.id === nid);
+                      if (n?.data?.netName) names.add(n.data.netName);
+                  });
+                  
+                  const extPorts = currentNetNodes.map(nid => nodes.find(n => n.id === nid))
+                                              .filter(n => n?.type === 'port' && n.data.isExternal);
+                  
+                  if (extPorts.length > 0) {
+                       if (extPorts[0]?.data.label) {
+                           netName = extPorts[0].data.label;
                        }
-                   } else {
-                       connNodes.push({ component: "external", port: node.data.label });
-                   }
-               }
-           });
-           
-           if (connNodes.length >= 2) {
-               output.connections.push({ nodes: connNodes });
-           }
+                  }
+                  
+                  if (!netName) {
+                      if (names.size > 0) {
+                          netName = Array.from(names).sort()[0];
+                      } else {
+                          netName = `Net_${netCounter++}`;
+                      }
+                  }
+                  
+                  nets.set(netName, { ports: currentNetPorts, edges: currentNetEdges });
+              }
+          }
+      });
+
+      const portToNet = new Map<string, string>();
+      nets.forEach((val, key) => {
+          val.ports.forEach(p => portToNet.set(p, key));
+      });
+
+      const output = {
+          ckt_netlist: [] as any[],
+          ckt_type: "ckt",
+          external_ports: {} as any,
+          connection: {} as any,
+          llm_check: [] as any[]
+      };
+
+      let compIdCounter = 0;
+      nodes.filter(n => n.type === 'component').forEach(c => {
+          const compId = `#${compIdCounter++}`;
+          const geo = getAbsGeometry(c.id);
+          
+          const portObj: any = {};
+          const portConn: any = {};
+          
+          nodes.filter(n => n.parentNode === c.id).forEach(p => {
+              const pGeo = getAbsGeometry(p.id);
+              portObj[p.data.label] = {
+                  top_left: pGeo.tl,
+                  bottom_right: pGeo.br,
+                  center: pGeo.center
+              };
+              const nName = portToNet.get(p.id);
+              if (nName) portConn[p.data.label] = nName;
+          });
+
+          output.ckt_netlist.push({
+              id: compId,
+              component_type: c.data.type || "",
+              port_connection: portConn,
+              name: "",
+              attribute: [],
+              device_name: c.data.label,
+              bbox: {
+                  top_left: geo.tl,
+                  bottom_right: geo.br
+              },
+              port: portObj
+          });
+      });
+
+          let extIdCounter = 0;
+          nodes.filter(n => n.type === 'port' && n.data.isExternal).forEach(p => {
+              let eid = p.data.externalId;
+              
+              if (!eid) {
+                  // If no externalId, generate next available
+                  eid = `${++extIdCounter}`;
+                  // Ensure uniqueness if manually set IDs exist
+                  // (Simple increment might collide if mixed, but this is fallback)
+              }
+              
+              // Ensure format is "#ID"
+              const finalKey = eid.startsWith('#') ? eid : `#${eid}`;
+    
+              const geo = getAbsGeometry(p.id);
+              output.external_ports[finalKey] = {
+                  name: p.data.label,
+                  type: p.data.type || "",
+                  center: geo.center,
+                  top_left: geo.tl,
+                  bottom_right: geo.br
+              };
+          });
+
+      nets.forEach((val, netName) => {
+          const portList: string[][] = [];
+          val.ports.forEach(pid => {
+              const pNode = nodes.find(n => n.id === pid);
+              if (pNode && pNode.parentNode) {
+                  const parent = nodes.find(par => par.id === pNode.parentNode);
+                  if (parent) {
+                      portList.push([parent.data.label, pNode.data.label]);
+                  }
+              }
+          });
+          
+          const pixels: number[][][] = [];
+          val.edges.forEach(eid => {
+              const e = edges.find(edge => edge.id === eid);
+              if (e) {
+                  const s = getAbsGeometry(e.source).center;
+                  const t = getAbsGeometry(e.target).center;
+                  pixels.push([s, t]);
+              }
+          });
+          
+          if (portList.length > 0 || pixels.length > 0) {
+              output.connection[netName] = {
+                  ports: portList,
+                  pixels: pixels
+              };
+          }
       });
 
       return JSON.stringify(output, null, 2);

@@ -1160,6 +1160,35 @@ export default function App() {
   const [taskId, setTaskId] = useState<string | null>(null);
   const [extraTaskData, setExtraTaskData] = useState<any>({}); // Store preserved fields
 
+  // --- Heartbeat Logic ---
+  useEffect(() => {
+    if (!taskId) return;
+    
+    // Send heartbeat every 2 seconds
+    const interval = setInterval(() => {
+        fetch(`/api/heartbeat/${taskId}`, { method: 'POST', keepalive: true })
+            .catch(e => console.error("Heartbeat failed", e));
+    }, 2000);
+    
+    // Initial heartbeat
+    fetch(`/api/heartbeat/${taskId}`, { method: 'POST', keepalive: true });
+    
+    // Handle page close with fetch keepalive (more reliable for some network conditions than sendBeacon)
+    const handlePageHide = () => {
+        const url = `/api/heartbeat/${taskId}?status=finish`;
+        fetch(url, {
+            method: 'POST',
+            keepalive: true
+        }).catch(e => console.error("Exit signal failed", e));
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    
+    return () => {
+        clearInterval(interval);
+        window.removeEventListener('pagehide', handlePageHide);
+    };
+  }, [taskId]);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get('id');
@@ -1170,13 +1199,28 @@ export default function App() {
             fetch(`/api/get_task_json/${id}`).then(r => r.json()),
             fetch(`/api/get_task_image/${id}`).then(r => r.blob())
         ]).then(([jsonData, imgBlob]) => {
-            if (jsonData.error) {
+            if (jsonData.code && jsonData.code !== 200) {
+                setNotification("Error: " + jsonData.message);
+                return;
+            }
+            if (jsonData.error) { // Fallback for old error format if any
                 setNotification("Error: " + jsonData.error);
                 return;
             }
             
             // Process JSON
-            const parseResult = pythonDataToReactState(JSON.stringify(jsonData));
+            // Handle new API response structure (data wrapper)
+            let netlistData = jsonData;
+            // Case 1: Standard API response with code/message
+            if (jsonData.code === 200 && jsonData.data) {
+                netlistData = jsonData.data;
+            } 
+            // Case 2: Direct data object (backward compatibility or raw file read)
+            else if (jsonData.data && typeof jsonData.data === 'object' && jsonData.timestamp) {
+                 netlistData = jsonData.data;
+            }
+            
+            const parseResult = pythonDataToReactState(JSON.stringify(netlistData));
             if (!parseResult) {
                 setNotification("Failed to parse task data");
                 return;

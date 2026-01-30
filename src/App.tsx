@@ -190,17 +190,6 @@ const pythonDataToReactState = (jsonStr: string) => {
     // Mark as Old Format so we export it back in the same format
     extraData.isOldFormat = true;
 
-    const findNearestNodeInList = (list: any[], x: number, y: number) => {
-        for (const node of list) {
-            if ((node.type === 'port' || node.type === 'net_node') && 
-                Math.abs(node.position.x - x) <= SNAPPING_THRESHOLD && 
-                Math.abs(node.position.y - y) <= SNAPPING_THRESHOLD) {
-                return node;
-            }
-        }
-        return null;
-    };
-
     // 1. Parse Components & Ports
     (data.ckt_netlist || []).forEach((comp: any) => {
         const { top_left, bottom_right } = comp.bbox;
@@ -271,41 +260,39 @@ const pythonDataToReactState = (jsonStr: string) => {
             const [p1, p2] = seg;
             let currentNetName = getEffectiveNetName(rawNetName);
 
-            let n1 = findNearestNodeInList(nodes, p1[0], p1[1]);
+            // Find best existing node to snap to (Priority: Same Net > Unassigned > None)
+            const findSnapNode = (x: number, y: number) => {
+                 const candidates = nodes.filter(n => 
+                    (n.type === 'port' || n.type === 'net_node') && 
+                    Math.abs(n.position.x - x) <= SNAPPING_THRESHOLD && 
+                    Math.abs(n.position.y - y) <= SNAPPING_THRESHOLD
+                 );
+                 // 1. Try to find node already on this net
+                 let match = candidates.find(n => n.data.netName === currentNetName);
+                 if (match) return match;
+                 // 2. Try to find unassigned node (e.g. port)
+                 match = candidates.find(n => !n.data.netName);
+                 if (match) return match;
+                 
+                 // 3. Do not snap to nodes of other nets (avoids auto-merge)
+                 return null;
+            };
+
+            let n1 = findSnapNode(p1[0], p1[1]);
             if (!n1) {
                 n1 = { id: getId(), type: 'net_node', position: { x: p1[0], y: p1[1] }, data: { netName: currentNetName } };
                 nodes.push(n1);
             } else {
-                const existingNet = n1.data.netName;
-                if (existingNet && existingNet !== currentNetName) {
-                    netRenames.set(currentNetName, existingNet);
-                    mergeReport.add(`'${currentNetName}' merged into '${existingNet}'`);
-                    currentNetName = existingNet;
-                    nodes.forEach(n => { if(n.data.netName === rawNetName) n.data.netName = existingNet; });
-                    edges.forEach(e => { if(e.data.netName === rawNetName) e.data.netName = existingNet; });
-                } else if (!existingNet) {
-                    n1.data.netName = currentNetName;
-                }
+                 if (!n1.data.netName) n1.data.netName = currentNetName;
             }
 
-            let n2 = findNearestNodeInList(nodes, p2[0], p2[1]);
+            let n2 = findSnapNode(p2[0], p2[1]);
             if (!n2) {
                 n2 = { id: getId(), type: 'net_node', position: { x: p2[0], y: p2[1] }, data: { netName: currentNetName } };
                 nodes.push(n2);
             } else {
-                const existingNet = n2.data.netName;
-                if (existingNet && existingNet !== currentNetName) {
-                    netRenames.set(currentNetName, existingNet);
-                    mergeReport.add(`'${currentNetName}' merged into '${existingNet}'`);
-                    currentNetName = existingNet;
-                    nodes.forEach(n => { if(n.data.netName === rawNetName || n.data.netName === getEffectiveNetName(rawNetName)) n.data.netName = existingNet; });
-                    edges.forEach(e => { if(e.data.netName === rawNetName || e.data.netName === getEffectiveNetName(rawNetName)) e.data.netName = existingNet; });
-                } else if (!existingNet) {
-                    n2.data.netName = currentNetName;
-                }
+                 if (!n2.data.netName) n2.data.netName = currentNetName;
             }
-
-            if (n1.data.netName !== currentNetName) n1.data.netName = currentNetName;
 
             if (n1.id !== n2.id) {
                 const exists = edges.some(e => (e.source === n1.id && e.target === n2.id) || (e.source === n2.id && e.target === n1.id));
@@ -1271,11 +1258,71 @@ export default function App() {
   }, []);
 
   const handleSaveToServer = async () => {
-      if (!taskId) return;
-      
+      // 1. Get current netlist data
       const jsonStr = reactStateToPythonData(nodes, edges, extraTaskData);
+      let jsonData;
       try {
-          const jsonData = JSON.parse(jsonStr);
+          jsonData = JSON.parse(jsonStr);
+      } catch (e) {
+          setNotification("Error parsing data for save");
+          return;
+      }
+
+      // 2. [New Logic] If no task ID (opened locally), create a new task
+      if (!taskId) {
+          const currentFile = fileList[currentFileIndex];
+          if (!currentFile || !currentFile.imgFile) {
+              setNotification("Cannot save: No image file found in current session");
+              return;
+          }
+
+          setNotification("Creating new task record...");
+
+          try {
+              // Helper to convert File to Base64
+              const toBase64 = (file: File) => new Promise<string>((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.readAsDataURL(file);
+                  reader.onload = () => resolve(reader.result as string);
+                  reader.onerror = error => reject(error);
+              });
+
+              const base64Img = await toBase64(currentFile.imgFile);
+
+              // Auto-upload to create task
+              const res = await fetch('/api/upload_task', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                      json_data: jsonData,
+                      image_data: base64Img,
+                      filename: currentFile.name || "local_upload.json"
+                  })
+              });
+
+              const result = await res.json();
+              
+              if (result.task_id) {
+                  // Success! Set ID so subsequent saves are updates
+                  setTaskId(result.task_id);
+                  
+                  // Update URL so refresh doesn't lose context
+                  const newUrl = `${window.location.pathname}?id=${result.task_id}`;
+                  window.history.pushState({ path: newUrl }, '', newUrl);
+                  
+                  setNotification("New task created! Data saved to database.");
+              } else {
+                  setNotification("Failed to create task: " + (result.error || "Unknown error"));
+              }
+          } catch (e) {
+              console.error("Auto-upload error", e);
+              setNotification("Auto-create task failed: " + e);
+          }
+          return;
+      }
+      
+      // 3. [Existing Logic] Have task ID, standard update
+      try {
           const res = await fetch(`/api/save_task/${taskId}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1284,7 +1331,7 @@ export default function App() {
           
           const result = await res.json();
           if (result.success) {
-              setNotification("Saved successfully!");
+              setNotification("Saved successfully (Database Updated)");
               if (window.opener) {
                   window.opener.postMessage('task_updated', '*');
               }

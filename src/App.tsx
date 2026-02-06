@@ -2799,7 +2799,7 @@ export default function App() {
                                     <div key={n.id} className={`absolute rounded-full border border-white shadow-sm z-20 flex items-center justify-center transition-transform ${sel ? 'scale-150 ring-2 ring-blue-500' : ''} ${isConflict ? 'animate-pulse ring-2 ring-red-500' : ''}`}
                                         style={{ left: n.position.x, top: n.position.y, width: isNet?8:10, height: isNet?8:10, backgroundColor: sel?'#FFD700':bg, transform: 'translate(-50%,-50%)' }}>
                                         {isConflict && !isNet && <div className="absolute -top-6 -right-6 text-red-600 bg-white rounded-full p-0.5 shadow-sm"><AlertTriangle size={12}/></div>}
-                                        {!hideAll && !isNet && (showPorts || n.data.isExternal || (n.parentId && selectedIds.has(n.parentId))) && (
+                                        {!hideAll && !isNet && n.data.label && (showPorts || n.data.isExternal || (n.parentId && selectedIds.has(n.parentId))) && (
                                             <div className="absolute left-2.5 -top-5 bg-indigo-600 text-white text-[9px] px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap z-50 pointer-events-none border border-indigo-400/50">
                                                 {n.data.label}
                                             </div>

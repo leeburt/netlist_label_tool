@@ -16,6 +16,7 @@ const SNAPPING_THRESHOLD = 8;
 // Default Suggestions for Autocomplete
 const DEFAULT_TYPES = ['NMOS', 'PMOS', 'RES', 'CAP', 'IND', 'VSOURCE', 'ISOURCE', 'GND', 'VDD'];
 const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS', 'MINUS', 'A', 'B', 'Y'];
+const DEFAULT_PORT_TYPES = ['port', 'gnd', 'vdd'];
 
 // Color Generation
     const stringToColor = (str: any) => {
@@ -689,6 +690,7 @@ const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, s
                                 ['Zoom', 'Mouse Wheel'],
                                 ['Delete Selected', 'Delete'],
                                 ['Delete Network', 'Ctrl + Delete'],
+                                ['Remove File', 'Shift + Delete'],
                                 ['Tools (S/R/E/W)', 'Select/Comp/Port/Wire'],
                                 ['Toggle Ports', 'P'],
                                 ['Toggle Labels', 'L'],
@@ -710,16 +712,16 @@ const SettingsDialog = ({ isOpen, onClose, appSettings, setAppSettings, theme, s
     );
 };
 
-const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, position, onConfirm, onCancel }: any) => {
+const ModalDialog = ({ isOpen, type, initialName = '', initialType = '', data, options = {}, position, onConfirm, onCancel }: any) => {
   const [name, setName] = useState(initialName);
-  const [inputType, setInputType] = useState('');
+  const [inputType, setInputType] = useState(initialType);
   
   useEffect(() => {
     if (isOpen) {
         setName(initialName || '');
-        setInputType('');
+        setInputType(initialType || '');
     }
-  }, [isOpen, initialName]);
+  }, [isOpen, initialName, initialType]);
 
   if (!isOpen) return null;
 
@@ -759,7 +761,7 @@ const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, posit
       <div className="bg-white dark:bg-slate-900 rounded-lg shadow-2xl w-80 p-5 border border-slate-200 dark:border-slate-700" 
            style={modalStyle}
            onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-bold mb-4 text-slate-800 dark:text-slate-100">{type === 'comp' ? 'New Component' : 'New Port'}</h3>
+        <h3 className="text-lg font-bold mb-4 text-slate-800 dark:text-slate-100">{type === 'comp' ? 'New Component' : (type === 'CONVERT_NET_TO_PORT' ? 'Convert to External Port' : 'New Port')}</h3>
         <div className="space-y-4">
             <div>
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">名称 (Name)</label>
@@ -778,10 +780,10 @@ const ModalDialog = ({ isOpen, type, initialName = '', data, options = {}, posit
                 <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">类型 (Type)</label>
                 <AutocompleteInput 
                     className="w-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 p-2 rounded text-sm focus:border-blue-500 outline-none"
-                    options={type === 'comp' ? options.compTypes : []}
+                    options={type === 'comp' ? options.compTypes : (options.portTypes || [])}
                     value={inputType} 
                     onChange={setInputType} 
-                    placeholder="e.g. NMOS" 
+                    placeholder={type === 'comp' ? 'e.g. NMOS' : 'e.g. port'} 
                     onFocus={(e: any) => e.target.select()}
                     onKeyDown={(e: any) => e.key === 'Enter' && onConfirm(name, inputType)} 
                 />
@@ -1128,8 +1130,9 @@ export default function App() {
     isOpen: boolean;
     type?: string;
     data?: any;
-    options?: { compTypes: string[]; portNames: string[] };
+    options?: { compTypes: string[]; portNames: string[]; portTypes?: string[] };
     initialName?: string;
+    initialType?: string;
     position?: { x: number; y: number };
     onConfirm?: (name: string, type: string) => void;
     onCancel?: () => void;
@@ -1344,6 +1347,45 @@ export default function App() {
       }
   };
 
+  const handleRemoveFile = async () => {
+      if (currentFileIndex === -1 || !fileList[currentFileIndex]) return;
+      if (!projectDirHandle) {
+          setNotification("需要通过 'Open Folder' 打开项目文件夹才能使用移除功能");
+          return;
+      }
+      const currentFile = fileList[currentFileIndex];
+      try {
+          const removeDir = await projectDirHandle.getDirectoryHandle('remove', { create: true });
+          if (currentFile.imgFile) {
+              const dest = await removeDir.getFileHandle(currentFile.imgFile.name, { create: true });
+              const w = await dest.createWritable();
+              await w.write(await currentFile.imgFile.arrayBuffer());
+              await w.close();
+              await projectDirHandle.removeEntry(currentFile.imgFile.name);
+          }
+          if (currentFile.jsonFile) {
+              const dest = await removeDir.getFileHandle(currentFile.jsonFile.name, { create: true });
+              const w = await dest.createWritable();
+              await w.write(await currentFile.jsonFile.arrayBuffer());
+              await w.close();
+              await projectDirHandle.removeEntry(currentFile.jsonFile.name);
+          }
+          const removedName = currentFile.name;
+          const newList = fileList.filter((_: any, i: number) => i !== currentFileIndex);
+          setFileList(newList);
+          if (newList.length === 0) {
+              setNodes([]); setEdges([]); setBgImage(null); setCurrentFileIndex(-1);
+          } else {
+              const nextIdx = Math.min(currentFileIndex, newList.length - 1);
+              loadFile(nextIdx, newList);
+          }
+          setNotification(`已移除: ${removedName} → remove/`);
+      } catch (e: any) {
+          console.error("Remove file error:", e);
+          setNotification("移除失败: " + (e.message || e));
+      }
+  };
+
   // --- Unique Values for Dropdowns ---
   const uniqueComponentTypes = useMemo(() => {
       const types = new Set([...DEFAULT_TYPES, ...extraTypes]);
@@ -1360,6 +1402,14 @@ export default function App() {
       });
       return Array.from(names).sort();
   }, [nodes, extraPorts]);
+
+  const uniquePortTypes = useMemo(() => {
+      const types = new Set(DEFAULT_PORT_TYPES);
+      nodes.forEach(n => {
+          if (n.type === 'port' && n.data.type) types.add(n.data.type);
+      });
+      return Array.from(types).sort();
+  }, [nodes]);
 
   // --- Theme Effect ---
   useEffect(() => {
@@ -1505,6 +1555,7 @@ export default function App() {
                   id: getId(),
                   name: img.name,
                   imgFile: img,
+                  imgHandle: imgItem.handle,
                   jsonFile: matchingJsonItem?.file,
                   jsonHandle: matchingJsonItem?.handle,
                   data: null,
@@ -1855,6 +1906,7 @@ export default function App() {
         }
         else if (e.ctrlKey && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
         else if (e.ctrlKey && key === 'y') { e.preventDefault(); redo(); }
+        else if ((e.key === 'Delete' || e.key === 'Backspace') && e.shiftKey) { e.preventDefault(); handleRemoveFile(); }
         else if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelected(e.ctrlKey); }
         else if (e.key === 'Escape') { 
             if (connectStartId) cancelConnect();
@@ -1980,8 +2032,9 @@ export default function App() {
                 isOpen: true, 
                 type: 'port', 
                 data: { x: wx, y: wy, context }, 
-                options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames },
-                position: { x: e.clientX, y: e.clientY } // Pass screen coords
+                initialType: context.type === 'ext' ? 'port' : '',
+                options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames, portTypes: uniquePortTypes },
+                position: { x: e.clientX, y: e.clientY }
             }); 
         }
     }
@@ -2062,8 +2115,8 @@ export default function App() {
                 isOpen: true, 
                 type: 'comp', 
                 data: { x: Math.min(dragState.startX, dragState.currX), y: Math.min(dragState.startY, dragState.currY), w, h }, 
-                options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames },
-                position: { x: e.clientX, y: e.clientY } // Pass screen coords
+                options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames, portTypes: uniquePortTypes },
+                position: { x: e.clientX, y: e.clientY }
             });
         }
     }
@@ -2222,14 +2275,32 @@ export default function App() {
                  position: { x, y }, 
                  parentId: context.type === 'int' ? context.parent.id : null, 
                  data: { 
-                     label: name, 
-                     type, 
+                     label: name || '', 
+                     type: type || 'port', 
                      isExternal: context.type === 'ext', 
                      compName: context.type === 'int' ? context.parent.data.label : 'ext',
                      externalId 
                  } 
              };
              return [...prev, newNode];
+        });
+    } else if (dialog.type === 'CONVERT_NET_TO_PORT') {
+        const nodeId = dialog.data.nodeId;
+        setNodes((prev: any[]) => {
+            let externalId: string | undefined = undefined;
+            const existingIds = prev
+                .filter(n => n.type === 'port' && n.data.isExternal && n.data.externalId !== undefined)
+                .map(n => { const s = String(n.data.externalId).replace('#', ''); return parseInt(s, 10); })
+                .filter(n => !isNaN(n));
+            let nextId = 1;
+            if (existingIds.length > 0) nextId = Math.max(...existingIds) + 1;
+            externalId = `${nextId}`;
+
+            return prev.map(n => n.id === nodeId ? {
+                ...n,
+                type: 'port',
+                data: { ...n.data, label: name || '', type: type || 'port', isExternal: true, compName: 'external', externalId }
+            } : n);
         });
     }
       setDialog({ isOpen: false, type: '', data: null });
@@ -2329,7 +2400,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans overflow-hidden transition-colors duration-200">
         {notification && <Notification message={notification} onClose={() => setNotification(null)} />}
-        <ModalDialog isOpen={dialog.isOpen} type={dialog.type} data={dialog.data} options={dialog.options} initialName={dialog.initialName} position={dialog.position} onConfirm={dialog.onConfirm || handleDialogConfirm} onCancel={dialog.onCancel || (() => setDialog({ isOpen: false }))} />
+        <ModalDialog isOpen={dialog.isOpen} type={dialog.type} data={dialog.data} options={dialog.options} initialName={dialog.initialName} initialType={dialog.initialType} position={dialog.position} onConfirm={dialog.onConfirm || handleDialogConfirm} onCancel={dialog.onCancel || (() => setDialog({ isOpen: false }))} />
         <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} appSettings={appSettings} setAppSettings={setAppSettings} theme={theme} setTheme={setTheme} />
         
         {/* Hover Tooltip */}
@@ -2535,10 +2606,13 @@ export default function App() {
                                             </div>
                                             <div>
                                                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1 block">Type</label>
-                                                <input className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" 
+                                                <AutocompleteInput 
+                                                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600" 
+                                                    options={uniquePortTypes}
                                                     value={singleSelected.data.type || ''} 
-                                                    placeholder="e.g. IN/OUT"
-                                                    onChange={e => { saveHistory(); const v=e.target.value; setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
+                                                    placeholder="e.g. port"
+                                                    onFocus={(e: any) => e.target.select()}
+                                                    onChange={(v: any) => { saveHistory(); setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, type: v } } : n)); }} 
                                                 />
                                             </div>
                                         </div>
@@ -2569,6 +2643,23 @@ export default function App() {
                                              </div>
                                          )}
                                      </div>
+
+                                     {/* Convert Net Node to External Port */}
+                                     {singleSelected.type === 'net_node' && (
+                                         <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                                             <button onClick={() => {
+                                                 setDialog({
+                                                     isOpen: true,
+                                                     type: 'CONVERT_NET_TO_PORT',
+                                                     data: { nodeId: singleSelected.id },
+                                                     initialType: 'port',
+                                                     options: { compTypes: uniqueComponentTypes, portNames: uniquePortNames, portTypes: uniquePortTypes },
+                                                 });
+                                             }} className="w-full py-2 bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400 border border-orange-200 dark:border-orange-900/50 rounded text-xs font-bold hover:bg-orange-100 dark:hover:bg-orange-900/40 flex justify-center gap-2">
+                                                 <CircleDot size={14}/> 转为 External Port
+                                             </button>
+                                         </div>
+                                     )}
 
                                      {/* Node Position Editing (Moved to bottom) */}
                                      {singleSelected.type !== 'net_edge' && (

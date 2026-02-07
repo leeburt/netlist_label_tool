@@ -7,7 +7,7 @@ import {
   FolderOpen, ChevronLeft, ChevronRight, Search, CheckCircle2,
   X, Layers, Info,
   Moon, Sun, GripHorizontal, Monitor, Maximize,
-  Send, Bot, Sparkles, Zap, PanelRightClose, Check
+  Send, Bot, Sparkles, Zap, PanelRightClose, Check, Edit2, Square
 } from 'lucide-react';
 
 // --- 0. Utility Functions ---
@@ -18,6 +18,15 @@ const SNAPPING_THRESHOLD = 8;
 const DEFAULT_TYPES = ['NMOS', 'PMOS', 'RES', 'CAP', 'IND', 'VSOURCE', 'ISOURCE', 'GND', 'VDD'];
 const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS', 'MINUS', 'A', 'B', 'Y'];
 const DEFAULT_PORT_TYPES = ['port', 'gnd', 'vdd'];
+
+const DEFAULT_LLM_HOST = 'https://a.fe8.cn/v1';
+
+const DEFAULT_LLM_MODELS = [
+    { id: 'gpt-4.1', alias: 'GPT-4.1' },
+    { id: 'gpt-5.2', alias: 'GPT-5.2' },
+    { id: 'claude-sonnet-4-5-20250929-thinking', alias: 'sonnet-4.5-thinking' },
+    { id: 'gemini-3-pro-preview', alias: 'gemini-3-pro' }
+];
 
     const DEFAULT_LLM_SYSTEM_PROMPT = `你是一个专业的电路设计助手，可以回答各种问题。
     当用户提供了电路网表数据(JSON格式)时，你可以分析和修改它。网表数据结构:
@@ -50,10 +59,8 @@ const DEFAULT_PORT_TYPES = ['port', 'gnd', 'vdd'];
 const LLM_PRESETS = [
     { icon: '✅', label: '校对网表', prompt: '@网表 @原图  请校对当前网表，检查器件类型、端口连接、网络命名等是否有错误，以corrections格式返回修改建议。' },
     { icon: '🔍', label: '检查网表', prompt: '@网表 请检查当前网表数据是否有错误、缺失连接或端口命名问题。' },
-    { icon: '🔧', label: '修复问题', prompt: '@网表 请修复当前网表中的问题，以corrections格式返回修正建议。' },
+    { icon: '🔧', label: '修复网络名称', prompt: '@网表 @原图 请修复当前网表中的网络名称，以corrections格式返回修正建议。此时type是modify，然后修改网络的本身的key值' },
     { icon: '📝', label: '补全器件', prompt: '@网表 @原图 请根据电路拓扑结构，帮我添加可能缺失的器件和连接。' },
-    { icon: '📊', label: '网表摘要', prompt: '@网表 请总结当前网表的电路结构，列出所有器件及其连接关系。' },
-    { icon: '⚡', label: '优化连接', prompt: '@网表 请优化网表连接，合并冗余网络节点，以corrections格式返回优化建议。' },
 ];
 
 // --- Corrections Utilities ---
@@ -85,14 +92,55 @@ const applyCorrectionItems = (baselineJson: string, items: any[], checked: boole
             }
         } else if (c.to === 'connection') {
             data.connection = data.connection || {};
-            if (c.type === 'modify' && data.connection[c.key]) data.connection[c.key] = deepMergeObj(data.connection[c.key], c.content || {});
+            if (c.type === 'modify' && data.connection[c.key]) {
+                const merged = deepMergeObj(data.connection[c.key], c.content || {});
+                // Handle rename if LLM puts 'key' in content
+                if (merged.key && merged.key !== c.key) {
+                    const newKey = merged.key;
+                    delete merged.key;
+                    delete data.connection[c.key];
+                    data.connection[newKey] = merged;
+                } else {
+                    data.connection[c.key] = merged;
+                }
+            }
             else if (c.type === 'del') delete data.connection[c.key];
-            else if (c.type === 'add') data.connection[c.key] = c.content || {};
+            else if (c.type === 'add') {
+                const content = c.content || {};
+                if (content.key && content.key !== c.key) {
+                    const newKey = content.key;
+                    const newContent = { ...content };
+                    delete newContent.key;
+                    data.connection[newKey] = newContent;
+                } else {
+                    data.connection[c.key] = content;
+                }
+            }
         } else if (c.to === 'external_ports') {
             data.external_ports = data.external_ports || {};
-            if (c.type === 'modify' && data.external_ports[c.key]) data.external_ports[c.key] = deepMergeObj(data.external_ports[c.key], c.content || {});
+            if (c.type === 'modify' && data.external_ports[c.key]) {
+                const merged = deepMergeObj(data.external_ports[c.key], c.content || {});
+                if (merged.key && merged.key !== c.key) {
+                    const newKey = merged.key;
+                    delete merged.key;
+                    delete data.external_ports[c.key];
+                    data.external_ports[newKey] = merged;
+                } else {
+                    data.external_ports[c.key] = merged;
+                }
+            }
             else if (c.type === 'del') delete data.external_ports[c.key];
-            else if (c.type === 'add') data.external_ports[c.key] = c.content || {};
+            else if (c.type === 'add') {
+                const content = c.content || {};
+                if (content.key && content.key !== c.key) {
+                    const newKey = content.key;
+                    const newContent = { ...content };
+                    delete newContent.key;
+                    data.external_ports[newKey] = newContent;
+                } else {
+                    data.external_ports[c.key] = content;
+                }
+            }
         }
     });
     return JSON.stringify(data, null, 2);
@@ -282,7 +330,7 @@ const pythonDataToReactState = (jsonStr: string) => {
              const coord = info.coord || info.center || [0, 0];
              
              // Determine Label and ExternalId
-             const label = info.name || key;
+             const label = info.name || "";
              const externalId = key;
 
              nodes.push({
@@ -368,7 +416,10 @@ const pythonDataToReactState = (jsonStr: string) => {
         const y = top_left[1];
         const w = bottom_right[0] - top_left[0];
         const h = bottom_right[1] - top_left[1];
-        const compId = comp.device_name || comp.id; 
+        let compId = comp.device_name || comp.id; 
+        if (nodes.some(n => n.id === compId)) {
+             compId = `${compId}_${getId()}`;
+        }
 
         nodes.push({
             id: compId,
@@ -401,7 +452,7 @@ const pythonDataToReactState = (jsonStr: string) => {
          if (!center) return;
          const pId = getId();
          
-         const label = info.name || key;
+         const label = info.name || "";
          const externalId = key;
 
          nodes.push({
@@ -1243,16 +1294,17 @@ const RightSidebar = ({
     );
 };
 
-const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll }: {
-    items: any[], baseline: string, checked: boolean[], onToggle: (i: number) => void, onToggleAll?: (val: boolean) => void
+const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll, onItemClick }: {
+    items: any[], baseline: string, checked: boolean[], onToggle: (i: number) => void, onToggleAll?: (val: boolean) => void, onItemClick?: (item: any) => void
 }) => {
-    const typeStyle: any = {
-        modify: 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
-        del: 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
-        add: 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
+    const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+    const toggleExpand = (i: number) => {
+        const next = new Set(expanded);
+        if (next.has(i)) next.delete(i);
+        else next.add(i);
+        setExpanded(next);
     };
-    const typeLabel: any = { modify: '修改', del: '删除', add: '新增' };
-    const sectionIcon: any = { ckt_netlist: '📦', connection: '🔗', external_ports: '📍' };
 
     const getDiffs = (c: any) => {
         if (c.type === 'del') return [{ field: '整项', old: '存在', val: '删除' }];
@@ -1284,45 +1336,73 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll }: {
     const checkedCount = checked.filter(Boolean).length;
 
     return (
-        <div className="my-2 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <div className="px-3 py-2 bg-gradient-to-r from-violet-50 to-blue-50 dark:from-violet-900/20 dark:to-blue-900/20 flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">📋 校对结果 · {items.length} 项</span>
+        <div className="my-2 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden bg-white dark:bg-slate-900">
+            <div className="px-3 py-2 bg-slate-50 dark:bg-slate-950/50 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">校对 · {items.length} 项</span>
                 <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono text-violet-500">{checkedCount}/{items.length} 已应用</span>
+                    <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500">{checkedCount}/{items.length}</span>
                     {onToggleAll && (
                         <button onClick={() => onToggleAll(checkedCount < items.length)}
-                            className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-800/40 text-violet-600 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-700/50 transition-colors font-medium">
-                            {checkedCount < items.length ? '✅ 全选' : '↩ 取消'}
+                            className="text-[10px] px-2 py-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors">
+                            {checkedCount < items.length ? '全选' : '取消'}
                         </button>
                     )}
                 </div>
             </div>
-            <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-[360px] overflow-y-auto custom-scrollbar">
+            
+            <div className="max-h-[320px] overflow-y-auto custom-scrollbar">
                 {items.map((c: any, i: number) => {
                     const diffs = getDiffs(c);
+                    const isExpanded = expanded.has(i);
+                    const firstDiff = diffs[0];
+                    // 智能摘要：优先展示第一条差异，如果没差异显示原因
+                    const summaryText = firstDiff 
+                        ? (firstDiff.field === '整项' ? firstDiff.val : `${firstDiff.field}: ${firstDiff.old} → ${firstDiff.val}`)
+                        : (c.reason || c.type);
+                    
                     return (
-                        <div key={i} className={`px-3 py-2 text-[11px] transition-all cursor-pointer select-none ${checked[i] ? 'bg-green-50/60 dark:bg-green-900/10' : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'}`}
-                            onClick={() => onToggle(i)}>
-                            <div className="flex items-center gap-2">
-                                <div className={`w-[18px] h-[18px] rounded border-2 flex items-center justify-center transition-all shrink-0 ${checked[i] ? 'bg-green-500 border-green-500 text-white shadow-sm shadow-green-500/30' : 'border-slate-300 dark:border-slate-600'}`}>
-                                    {checked[i] && <Check size={11} strokeWidth={3}/>}
+                        <div key={i} className={`text-[11px] border-b border-slate-50 dark:border-slate-800/50 last:border-0 transition-colors ${checked[i] ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''}`}>
+                            <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/30"
+                                onClick={() => { if (onItemClick) onItemClick(c); }}>
+                                
+                                <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all shrink-0 ${checked[i] ? 'bg-blue-500 border-blue-500 text-white' : 'border-slate-300 dark:border-slate-600'}`}
+                                     onClick={(e) => { e.stopPropagation(); onToggle(i); }}>
+                                    {checked[i] && <Check size={10} strokeWidth={3}/>}
                                 </div>
-                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold leading-none ${typeStyle[c.type] || 'bg-slate-100 text-slate-500'}`}>{typeLabel[c.type] || c.type}</span>
-                                <span className="text-[10px]">{sectionIcon[c.to] || '📄'}</span>
-                                <code className="text-violet-600 dark:text-violet-400 font-mono text-[10px] bg-violet-50 dark:bg-violet-900/20 px-1 rounded">{c.key}</code>
-                                {c.reason && <span className="text-slate-400 dark:text-slate-500 truncate ml-auto text-[10px] max-w-[110px] italic" title={c.reason}>{c.reason}</span>}
+
+                                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.type === 'add' ? 'bg-green-500' : (c.type === 'del' ? 'bg-red-500' : 'bg-amber-500')}`} />
+
+                                <span className="font-mono font-bold text-slate-700 dark:text-slate-300 min-w-[24px]">{c.key}</span>
+
+                                <div className="flex-1 min-w-0 flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                                    <span className="truncate opacity-90" title={typeof summaryText === 'string' ? summaryText : ''}>
+                                       {summaryText}
+                                    </span>
+                                </div>
+
+                                <button onClick={(e) => { e.stopPropagation(); toggleExpand(i); }} 
+                                    className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400">
+                                    <ChevronRight size={12} className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}/>
+                                </button>
                             </div>
-                            {diffs.length > 0 && (
-                                <div className="mt-1.5 ml-[26px] space-y-0.5">
-                                    {diffs.slice(0, 4).map((d, j) => (
-                                        <div key={j} className="flex items-center gap-1.5 text-[10px] font-mono leading-tight">
-                                            <span className="text-slate-400 dark:text-slate-500 min-w-[60px] truncate" title={d.field}>{d.field}</span>
-                                            {d.old !== '-' && <span className="text-red-400/80 line-through truncate max-w-[80px]" title={String(d.old)}>{d.old}</span>}
-                                            <span className="text-slate-300 dark:text-slate-600">→</span>
-                                            <span className="text-green-600 dark:text-green-400 truncate max-w-[80px]" title={String(d.val)}>{d.val}</span>
+
+                            {isExpanded && (
+                                <div className="px-3 pb-2 pl-9 space-y-1 bg-slate-50/50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-800/50">
+                                    {c.reason && (
+                                        <div className="text-[10px] text-slate-400 italic mb-1 border-b border-slate-200 dark:border-slate-700/50 pb-1">
+                                            {c.reason}
+                                        </div>
+                                    )}
+                                    {diffs.map((d: any, j: number) => (
+                                        <div key={j} className="flex items-start gap-1.5 font-mono text-[10px] leading-tight">
+                                            <span className="text-slate-500 dark:text-slate-400 shrink-0">{d.field}:</span>
+                                            <div className="flex flex-wrap items-baseline gap-1 break-all">
+                                                {d.old !== '-' && <span className="text-red-400/80 line-through decoration-red-400/50">{d.old}</span>}
+                                                {d.old !== '-' && <span className="text-slate-300 dark:text-slate-600">→</span>}
+                                                <span className="text-green-600 dark:text-green-400 font-medium">{d.val}</span>
+                                            </div>
                                         </div>
                                     ))}
-                                    {diffs.length > 4 && <div className="text-slate-400 text-[9px]">+{diffs.length - 4} 更多字段...</div>}
                                 </div>
                             )}
                         </div>
@@ -1333,15 +1413,42 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll }: {
     );
 };
 
-const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist, bgImage, notify }: any) => {
+const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist, bgImage, notify, onHighlight }: any) => {
     const [settings, setSettings] = useState(() => {
-        try { const s = localStorage.getItem('llm_settings'); if (s) { const p = JSON.parse(s); if (p?.host) return p; } } catch {}
-        return { host: 'https://api.openai.com', apiKey: '', model: 'gpt-4o', systemPrompt: DEFAULT_LLM_SYSTEM_PROMPT };
+        try { 
+            const s = localStorage.getItem('llm_settings'); 
+            if (s) { 
+                const p = JSON.parse(s); 
+                if (p?.host) {
+                    // Sync Models with Code Constants
+                    // Strategy: Force update defaults from code, but keep user-added custom models
+                    const userCustomModels = (p.models || []).filter((m: any) => 
+                        !DEFAULT_LLM_MODELS.some(dm => dm.id === m.id)
+                    );
+                    p.models = [...DEFAULT_LLM_MODELS, ...userCustomModels];
+                    
+                    // Ensure current model is in list
+                    if (p.model && !p.models.find((m: any) => m.id === p.model)) {
+                        p.models.push({ id: p.model, alias: p.model });
+                    }
+                    return p; 
+                } 
+            } 
+        } catch {}
+        return { 
+            host: DEFAULT_LLM_HOST, 
+            apiKey: '', 
+            model: DEFAULT_LLM_MODELS[0].id, 
+            models: DEFAULT_LLM_MODELS,
+            systemPrompt: DEFAULT_LLM_SYSTEM_PROMPT 
+        };
     });
     const [msgs, setMsgs] = useState<any[]>([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [cfgOpen, setCfgOpen] = useState(false);
+    const [editingMsgIndex, setEditingMsgIndex] = useState<number | null>(null);
+    const [editContent, setEditContent] = useState('');
     const endRef = useRef<HTMLDivElement>(null);
     const abortRef = useRef<AbortController | null>(null);
     const lastNetlistRef = useRef<string>('{}');
@@ -1394,6 +1501,192 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         });
         const result = applyCorrectionItems(msg.baseline, msg.corrections, newChecked);
         onApplyNetlist(result, !firstApply);
+    };
+    
+    // Handle item click for highlighting
+    const handleItemClick = (item: any) => {
+        if (!onHighlight) return;
+        
+        // Logic to determine what IDs to highlight based on item
+        // item structure: { to: 'ckt_netlist'|'connection'|'external_ports', key: string, ... }
+        
+        if (item.to === 'ckt_netlist') {
+            // key is the rawId (e.g. "#12") from python data
+            const targetNode = nodes.find((n: any) => n.data?.rawId === item.key);
+            if (targetNode) {
+                onHighlight([targetNode.id]);
+            } else {
+                 // Fallback: direct ID match
+                 if (nodes.find((n: any) => n.id === item.key)) {
+                     onHighlight([item.key]);
+                 }
+            }
+        } else if (item.to === 'external_ports') {
+            // key is the external port key (e.g. "#1")
+            const targetNode = nodes.find((n: any) => {
+                if (n.type !== 'port' || !n.data?.isExternal) return false;
+                const exId = n.data.externalId;
+                if (!exId) return false;
+                return exId === item.key || `#${exId}` === item.key || exId === `#${item.key}`;
+            });
+            if (targetNode) {
+                onHighlight([targetNode.id]);
+            }
+        } else if (item.to === 'connection') {
+            // key is the netName. We need to find all edges with this netName
+            const netName = item.key;
+            // Edges structure in react-flow usually has data.netName if customized
+            const relevantEdges = edges.filter((e: any) => e.data?.netName === netName);
+            // Also include Net Nodes
+            const relevantNodes = nodes.filter((n: any) => n.type === 'net_node' && n.data?.netName === netName);
+            
+            const ids = [...relevantEdges.map((e: any) => e.id), ...relevantNodes.map((n: any) => n.id)];
+            onHighlight(ids);
+        }
+    };
+
+    const handleResend = async (index: number, newContent: string) => {
+        setEditingMsgIndex(null);
+        if (!newContent.trim()) return;
+
+        // Truncate history up to this message
+        const history = msgs.slice(0, index);
+        const oldMsg = msgs[index];
+        const updatedMsg = { ...oldMsg, content: newContent };
+        
+        // Update state with truncated history + updated message
+        const newMsgs = [...history, updatedMsg];
+        setMsgs(newMsgs);
+        setLoading(true);
+
+        // Re-construct apiMsgs
+        let sysContent = settings.systemPrompt;
+        
+        // Check for new flags in the edited content
+        const newHasNetlist = newContent.includes('@网表');
+        const newHasImage = newContent.includes('@原图');
+        // Update flags
+        updatedMsg.hasNetlist = newHasNetlist;
+        updatedMsg.hasImage = newHasImage;
+        
+        if (newHasNetlist) {
+            // Ensure we have netlist. If it was already there, good. If not, get it.
+            // Note: getNetlist() gets *current* state. 
+            // If we are resending an old message, the state might have changed?
+            // Usually we want the *current* state for the new request.
+            const netlist = getNetlist();
+            lastNetlistRef.current = netlist;
+            sysContent += '\n\n当前网表:\n```json\n' + netlist + '\n```';
+        }
+
+        const apiMsgs: any[] = [{ role: 'system', content: sysContent }];
+        
+        newMsgs.forEach((m: any) => {
+            if (m.role === 'user') {
+                const cleanText = m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim() || m.content;
+                if (m.hasImage && bgImage?.startsWith('data:')) {
+                    apiMsgs.push({ role: 'user', content: [
+                        { type: 'image_url', image_url: { url: bgImage } },
+                        { type: 'text', text: cleanText }
+                    ]});
+                } else {
+                    apiMsgs.push({ role: 'user', content: cleanText });
+                }
+            } else if (m.role === 'assistant') {
+                apiMsgs.push({ role: 'assistant', content: m.content });
+            }
+        });
+
+        // Copy-paste the fetch logic from send()
+        // Ideally refactor, but for now duplicate to ensure safety
+        try {
+            abortRef.current = new AbortController();
+            const host = settings.host.replace(/\/+$/, '');
+            const endpoint = host.match(/\/v\d+\/?$/) ? `${host}/chat/completions` : `${host}/v1/chat/completions`;
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.apiKey}` },
+                body: JSON.stringify({ model: settings.model, messages: apiMsgs, stream: true }),
+                signal: abortRef.current.signal
+            });
+            if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+
+            const resolveCorrections = (content: string): any[] | null => {
+                if (!newHasNetlist) return null; // Use local flag
+                 const matches = [...content.matchAll(/```(?:json|corrections)?\s*([\s\S]*?)```/g)];
+                for (const m of matches) {
+                    const block = m[1].trim();
+                    try {
+                        const parsed = JSON.parse(block);
+                        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].to && parsed[0].type) {
+                            return parsed;
+                        }
+                        const diff = autoDiffNetlists(lastNetlistRef.current, block);
+                        if (diff) return diff;
+                    } catch {}
+                }
+                return null;
+            };
+
+            if (!res.headers.get('content-type')?.includes('text/event-stream')) {
+                const data = await res.json();
+                const content = data.choices?.[0]?.message?.content || '';
+                const reasoning = data.choices?.[0]?.message?.reasoning_content || '';
+                const corrs = resolveCorrections(content);
+                if (corrs) {
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false), reasoning }]);
+                } else {
+                    const applied = !newHasNetlist && extractAndApplyAll(content, 0) > 0;
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied, reasoning }]);
+                }
+                return;
+            }
+
+            const reader = res.body!.getReader();
+            const decoder = new TextDecoder();
+            let full = '';
+            let fullReasoning = '';
+            let appliedBlocks = 0;
+            setMsgs(prev => [...prev, { role: 'assistant', content: '', ts: Date.now() }]);
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                for (const line of decoder.decode(value).split('\n')) {
+                    if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+                    try {
+                        const choice = JSON.parse(line.slice(6)).choices?.[0];
+                        const delta = choice?.delta?.content || '';
+                        const reasoningDelta = choice?.delta?.reasoning_content || '';
+                        full += delta;
+                        fullReasoning += reasoningDelta;
+                        setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], content: full, reasoning: fullReasoning }; return c; });
+                    } catch {}
+                }
+                if (!newHasNetlist) {
+                    const newApplied = extractAndApplyAll(full, appliedBlocks);
+                    if (newApplied > appliedBlocks) {
+                        appliedBlocks = newApplied;
+                        setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
+                    }
+                }
+            }
+
+            const corrs = resolveCorrections(full);
+            if (corrs) {
+                setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false) }; return c; });
+            } else if (!newHasNetlist) {
+                const finalApplied = extractAndApplyAll(full, appliedBlocks);
+                if (finalApplied > appliedBlocks) {
+                    setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
+                }
+            }
+        } catch (e: any) {
+            if (e.name !== 'AbortError') setMsgs(prev => [...prev, { role: 'error', content: e.message, ts: Date.now() }]);
+        } finally {
+            setLoading(false);
+            abortRef.current = null;
+        }
     };
 
     const send = async () => {
@@ -1469,12 +1762,13 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             if (!res.headers.get('content-type')?.includes('text/event-stream')) {
                 const data = await res.json();
                 const content = data.choices?.[0]?.message?.content || '';
+                const reasoning = data.choices?.[0]?.message?.reasoning_content || '';
                 const corrs = resolveCorrections(content);
                 if (corrs) {
-                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false) }]);
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false), reasoning }]);
                 } else {
                     const applied = !hasNetlist && extractAndApplyAll(content, 0) > 0;
-                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied }]);
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied, reasoning }]);
                 }
                 return;
             }
@@ -1482,6 +1776,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             const reader = res.body!.getReader();
             const decoder = new TextDecoder();
             let full = '';
+            let fullReasoning = '';
             let appliedBlocks = 0;
             setMsgs(prev => [...prev, { role: 'assistant', content: '', ts: Date.now() }]);
 
@@ -1491,9 +1786,12 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                 for (const line of decoder.decode(value).split('\n')) {
                     if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
                     try {
-                        const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || '';
+                        const choice = JSON.parse(line.slice(6)).choices?.[0];
+                        const delta = choice?.delta?.content || '';
+                        const reasoningDelta = choice?.delta?.reasoning_content || '';
                         full += delta;
-                        setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], content: full }; return c; });
+                        fullReasoning += reasoningDelta;
+                        setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], content: full, reasoning: fullReasoning }; return c; });
                     } catch {}
                 }
                 // Only auto-apply JSON during streaming if NOT in netlist mode
@@ -1525,14 +1823,42 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
     };
 
     const renderContent = (text: string, msgData?: any, msgIdx?: number) => {
-        if (!text) return null;
-        return text.split(/(```[\s\S]*?```)/g).map((part, i) => {
+        if (!text && !msgData?.reasoning) return null;
+
+        const thinkMatch = text ? text.match(/<think>([\s\S]*?)(?:<\/think>|$)/) : null;
+        let thinkContent = null;
+        let mainContent = text || '';
+
+        if (thinkMatch) {
+            thinkContent = thinkMatch[1];
+            mainContent = text.replace(thinkMatch[0], '').trim();
+        }
+
+        // Merge with reasoning field if available
+        if (msgData?.reasoning) {
+            thinkContent = thinkContent ? (thinkContent + '\n---\n' + msgData.reasoning) : msgData.reasoning;
+        }
+
+        const renderedThink = thinkContent ? (
+            <details className="mb-2 group" defaultOpen={true}>
+                <summary className="text-[10px] text-slate-400 cursor-pointer select-none list-none flex items-center gap-1 hover:text-slate-600 dark:hover:text-slate-300 transition-colors outline-none">
+                     <ChevronRight size={10} className="group-open:rotate-90 transition-transform"/> 
+                     <span>Thinking Process</span>
+                </summary>
+                <div className="pl-3 border-l-2 border-slate-200 dark:border-slate-700 mt-1 ml-1 text-slate-500 dark:text-slate-400 italic text-xs whitespace-pre-wrap">
+                    {thinkContent}
+                </div>
+            </details>
+        ) : null;
+
+        const renderedMain = mainContent ? mainContent.split(/(```[\s\S]*?```)/g).map((part, i) => {
             if (part.startsWith('```')) {
                 const lang = part.match(/```(\w*)/)?.[1] || '';
                 if ((!lang || lang === 'corrections' || lang === 'json') && msgData?.corrections && msgIdx !== undefined) {
                     return <NetlistDiffTable key={i} items={msgData.corrections} baseline={msgData.baseline || '{}'}
                         checked={msgData.correctionChecked || []} onToggle={(ci: number) => handleCorrectionToggle(msgIdx, ci)}
-                        onToggleAll={(val: boolean) => handleCorrectionToggleAll(msgIdx, val)}/>;
+                        onToggleAll={(val: boolean) => handleCorrectionToggleAll(msgIdx, val)}
+                        onItemClick={handleItemClick}/>;
                 }
                 const code = part.replace(/```\w*\n?/, '').replace(/\n?```$/, '');
                 return (
@@ -1546,7 +1872,9 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                 );
             }
             return part ? <p key={i} className="whitespace-pre-wrap leading-relaxed">{part}</p> : null;
-        });
+        }) : null;
+
+        return <>{renderedThink}{renderedMain}</>;
     };
 
     return (
@@ -1559,7 +1887,17 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                     </div>
                     <div>
                         <h3 className="text-sm font-bold text-slate-800 dark:text-white leading-tight">AI 助手</h3>
-                        <p className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">{settings.model}</p>
+                        <div className="relative group">
+                            <select 
+                                className="appearance-none bg-transparent text-[10px] text-slate-400 dark:text-slate-500 font-mono outline-none cursor-pointer hover:text-violet-500 pr-3 py-0.5"
+                                value={settings.model}
+                                onChange={(e) => setSettings({...settings, model: e.target.value})}
+                            >
+                                {settings.models?.map((m: any) => (
+                                    <option key={m.id} value={m.id}>{m.alias}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                 </div>
                 <div className="flex items-center gap-0.5">
@@ -1575,19 +1913,71 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                     {[
                         { k: 'host', l: 'API Host', p: 'https://api.openai.com', t: 'text' },
                         { k: 'apiKey', l: 'API Key', p: 'sk-...', t: 'password' },
-                        { k: 'model', l: 'Model', p: 'gpt-4o', t: 'text' },
                     ].map((f: any) => (
                         <div key={f.k}>
                             <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">{f.l}</label>
                             <input type={f.t} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 mt-0.5 transition-all" placeholder={f.p} value={(settings as any)[f.k]} onChange={e => setSettings((s: any) => ({ ...s, [f.k]: e.target.value }))}/>
                         </div>
                     ))}
+                    
+                    {/* Model Management */}
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase flex justify-between items-center">
+                            <span>Models</span>
+                        </label>
+                        <div className="space-y-1.5 mt-0.5">
+                            {settings.models?.map((m: any, idx: number) => (
+                                <div key={idx} className="flex gap-1">
+                                    <input className="flex-1 min-w-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-[10px] text-slate-600 dark:text-slate-400" 
+                                        value={m.alias} placeholder="Alias"
+                                        onChange={e => {
+                                            const newModels = [...settings.models];
+                                            newModels[idx].alias = e.target.value;
+                                            setSettings({...settings, models: newModels});
+                                        }}
+                                    />
+                                    <input className="flex-[2] min-w-0 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-[10px] text-slate-600 dark:text-slate-400 font-mono" 
+                                        value={m.id} placeholder="Model ID"
+                                        onChange={e => {
+                                            const newModels = [...settings.models];
+                                            newModels[idx].id = e.target.value;
+                                            // Auto-update selection if modifying current
+                                            if (settings.model === m.id) setSettings({...settings, models: newModels, model: e.target.value});
+                                            else setSettings({...settings, models: newModels});
+                                        }}
+                                    />
+                                    <button onClick={() => {
+                                        const newModels = settings.models.filter((_: any, i: number) => i !== idx);
+                                        setSettings({...settings, models: newModels, model: settings.model === m.id ? (newModels[0]?.id || '') : settings.model});
+                                    }} className="px-1.5 text-slate-400 hover:text-red-500"><Trash2 size={12}/></button>
+                                </div>
+                            ))}
+                            <div className="flex gap-1 pt-1">
+                                <button onClick={() => setSettings({...settings, models: [...(settings.models||[]), {id: '', alias: 'New Model'}]})} 
+                                    className="w-full py-1 text-[10px] border border-dashed border-slate-300 dark:border-slate-700 text-slate-400 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                                    + Add Model
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div>
                         <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">System Prompt</label>
                         <textarea className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-violet-500 mt-0.5 h-20 resize-none transition-all" value={settings.systemPrompt} onChange={e => setSettings((s: any) => ({ ...s, systemPrompt: e.target.value }))}/>
                     </div>
-                    <div className="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 rounded px-2 py-1.5">
-                        💡 在消息中输入 <code className="text-violet-500 font-bold">@网表</code> 附带网表数据，<code className="text-violet-500 font-bold">@原图</code> 附带电路图片
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 rounded px-2 py-1.5 flex justify-between items-center">
+                        <span>💡 在消息中输入 <code className="text-violet-500 font-bold">@网表</code> 附带数据</span>
+                        <button onClick={() => {
+                            if (window.confirm('Reset settings to defaults?')) {
+                                setSettings({
+                                    host: DEFAULT_LLM_HOST, 
+                                    apiKey: '', 
+                                    model: DEFAULT_LLM_MODELS[0].id, 
+                                    models: DEFAULT_LLM_MODELS,
+                                    systemPrompt: DEFAULT_LLM_SYSTEM_PROMPT
+                                });
+                            }
+                        }} className="text-[9px] underline hover:text-red-500">Restore Defaults</button>
                     </div>
                 </div>
             )}
@@ -1630,11 +2020,35 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                             : m.role === 'error' ? 'bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/30 rounded-bl-md'
                             : 'bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 rounded-bl-md'
                         }`}>
-                            {m.role === 'user' ? (<>
-                                {m.hasNetlist && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">📋 网表</span>}
-                                {m.hasImage && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">🖼️ 原图</span>}
-                                {m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim()}
-                            </>) : (
+                            {m.role === 'user' ? (
+                                editingMsgIndex === i ? (
+                                    <div className="min-w-[200px]">
+                                        <textarea 
+                                            className="w-full bg-white/20 text-white rounded p-2 text-xs outline-none focus:bg-white/30 resize-none mb-2"
+                                            rows={3}
+                                            value={editContent}
+                                            onChange={e => setEditContent(e.target.value)}
+                                            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleResend(i, editContent); } }}
+                                        />
+                                        <div className="flex justify-end gap-2">
+                                            <button onClick={() => setEditingMsgIndex(null)} className="px-2 py-1 text-[10px] hover:bg-white/20 rounded">Cancel</button>
+                                            <button onClick={() => handleResend(i, editContent)} className="px-2 py-1 text-[10px] bg-white/20 hover:bg-white/30 rounded font-bold">Save & Resend</button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="group relative">
+                                        <div className="absolute -left-8 top-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={() => { setEditingMsgIndex(i); setEditContent(m.content); }} 
+                                                className="p-1.5 bg-slate-200 dark:bg-slate-700 rounded-full text-slate-500 hover:text-blue-500 hover:bg-white shadow-sm">
+                                                <Edit2 size={10}/>
+                                            </button>
+                                        </div>
+                                        {m.hasNetlist && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">📋 网表</span>}
+                                        {m.hasImage && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">🖼️ 原图</span>}
+                                        {m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim()}
+                                    </div>
+                                )
+                            ) : (
                                 m.content ? renderContent(m.content, m, i) : (
                                     <div className="flex gap-1.5 py-1">
                                         <div className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce"/>
@@ -1671,7 +2085,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                     />
                     {loading ? (
-                        <button onClick={() => { abortRef.current?.abort(); setLoading(false); }} className="p-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl transition-colors shrink-0 shadow-sm"><X size={18}/></button>
+                        <button onClick={() => { abortRef.current?.abort(); setLoading(false); }} className="p-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 rounded-xl transition-colors shrink-0 border border-slate-200 dark:border-slate-700 shadow-sm"><Square size={14} fill="currentColor"/></button>
                     ) : (
                         <button onClick={send} disabled={!input.trim()} className="p-2.5 bg-gradient-to-r from-violet-500 to-blue-500 hover:from-violet-600 hover:to-blue-600 text-white rounded-xl transition-all disabled:opacity-30 shrink-0 shadow-lg shadow-violet-500/20"><Send size={18}/></button>
                     )}
@@ -2870,7 +3284,17 @@ export default function App() {
       saveHistory();
       if (dialog.type === 'comp') {
           const { x, y, w, h } = dialog.data;
-          setNodes((prev: any[]) => [...prev, { id: `comp_${name}`, type: 'component', position: { x, y }, width: w, height: h, data: { label: name, type } }]);
+          setNodes((prev: any[]) => {
+              const uniqueId = `comp_${name}_${getId()}`;
+              return [...prev, { 
+                  id: uniqueId, 
+                  type: 'component', 
+                  position: { x, y }, 
+                  width: w, 
+                  height: h, 
+                  data: { label: name, type, rawId: `#${Date.now()}` } 
+              }];
+          });
       } else if (dialog.type === 'port') {
         const { x, y, context } = dialog.data;
         
@@ -3515,6 +3939,7 @@ export default function App() {
                 onApplyNetlist={handleApplyLLMNetlist}
                 bgImage={bgImage}
                 notify={setNotification}
+                onHighlight={(ids: any) => setSelectedIds(new Set(ids))}
             />
         </div>
     </div>

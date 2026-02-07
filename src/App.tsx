@@ -56,15 +56,18 @@ const DEFAULT_LLM_MODELS = [
   例: {"to":"connection","key":"net3","type":"modify","reason":"命名网络","content":{"rename_to":"RF_out"}}
 - 重命名external_ports的key: 同理用 "rename_to"
 
+【关键】重命名connection后，系统会**自动**更新所有ckt_netlist中的port_connection引用，你要相信底层系统。
+**禁止**为connection重命名额外生成ckt_netlist的port_connection修改项，这些是多余的。
+
 每一条修改都是独立的一个对象。即使需要修改很多项，也要逐个列出。
 **不要返回完整的网表JSON，只返回需要修改的项。**
 对于非校对/非修改类问题，正常文字回答即可。`;
 
 const LLM_PRESETS = [
     { icon: '✅', label: '校对网表', prompt: '@网表 @原图  请校对当前网表，检查器件类型、端口连接、网络命名等是否有错误，以corrections格式返回修改建议。' },
-    { icon: '🔍', label: '检查网表', prompt: '@网表 请检查当前网表数据是否有错误、缺失连接或端口命名问题。' },
+    { icon: '🔍', label: '检查器件的类型', prompt: '@网表 @原图 帮我check所有器件的类型，器件的名字字段是component_type是否正确' },
     { icon: '🔧', label: '修复网络名称', prompt: '@网表 @原图 请修复当前网表中的网络名称，以corrections格式返回修正建议。此时type是modify，然后修改网络的本身的key值' },
-    { icon: '📝', label: '补全器件', prompt: '@网表 @原图 请根据电路拓扑结构，帮我添加可能缺失的器件和连接。' },
+    { icon: '📝', label: '检查器件名字', prompt: '@网表 @原图 帮我check所有器件的名字，器件的名字字段是name是否正确' },
 ];
 
 // --- Corrections Utilities ---
@@ -83,6 +86,7 @@ const deepMergeObj = (target: any, source: any): any => {
 
 const applyCorrectionItems = (baselineJson: string, items: any[], checked: boolean[]): string => {
     const data = JSON.parse(baselineJson);
+    const connRenames = new Map<string, string>(); // oldKey -> newKey
     items.forEach((c, i) => {
         if (!checked[i]) return;
         if (c.to === 'ckt_netlist') {
@@ -98,7 +102,6 @@ const applyCorrectionItems = (baselineJson: string, items: any[], checked: boole
             data.connection = data.connection || {};
             if (c.type === 'modify' && data.connection[c.key]) {
                 const merged = deepMergeObj(data.connection[c.key], c.content || {});
-                // Handle rename via 'key', 'rename_to', or 'name' (connection has no native 'name' field)
                 const newKey = merged.key || merged.rename_to || merged.name;
                 if (newKey && newKey !== c.key) {
                     delete merged.key;
@@ -106,6 +109,7 @@ const applyCorrectionItems = (baselineJson: string, items: any[], checked: boole
                     delete merged.name;
                     delete data.connection[c.key];
                     data.connection[newKey] = merged;
+                    connRenames.set(c.key, newKey);
                 } else {
                     delete merged.rename_to;
                     delete merged.name;
@@ -161,7 +165,37 @@ const applyCorrectionItems = (baselineJson: string, items: any[], checked: boole
             }
         }
     });
+    // Auto-propagate connection renames to ckt_netlist port_connection
+    if (connRenames.size > 0 && data.ckt_netlist) {
+        (data.ckt_netlist as any[]).forEach((comp: any) => {
+            if (!comp.port_connection) return;
+            for (const portName of Object.keys(comp.port_connection)) {
+                const oldNet = comp.port_connection[portName];
+                if (connRenames.has(oldNet)) comp.port_connection[portName] = connRenames.get(oldNet);
+            }
+        });
+    }
     return JSON.stringify(data, null, 2);
+};
+
+// Filter out ckt_netlist port_connection changes that are already covered by connection renames
+const filterRedundantCorrections = (corrections: any[]): any[] => {
+    const renameNewNames = new Set<string>();
+    corrections.forEach(c => {
+        if (c.to === 'connection' && c.type === 'modify' && c.content) {
+            const nk = c.content.key || c.content.rename_to || c.content.name;
+            if (nk && nk !== c.key) renameNewNames.add(nk);
+        }
+    });
+    if (renameNewNames.size === 0) return corrections;
+    return corrections.filter(c => {
+        if (c.to !== 'ckt_netlist' || c.type !== 'modify' || !c.content) return true;
+        const keys = Object.keys(c.content);
+        if (keys.length !== 1 || keys[0] !== 'port_connection') return true;
+        const pc = c.content.port_connection;
+        if (!pc || typeof pc !== 'object') return true;
+        return !Object.values(pc).every(v => renameNewNames.has(v as string));
+    });
 };
 
 const getOriginalFromBaseline = (baselineJson: string, c: any): any => {
@@ -1679,17 +1713,17 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
 
             const resolveCorrections = (content: string): any[] | null => {
-                if (!newHasNetlist) return null; // Use local flag
+                if (!newHasNetlist) return null;
                  const matches = [...content.matchAll(/```(?:json|corrections)?\s*([\s\S]*?)```/g)];
                 for (const m of matches) {
                     const block = m[1].trim();
                     try {
                         const parsed = JSON.parse(block);
                         if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].to && parsed[0].type) {
-                            return parsed;
+                            return filterRedundantCorrections(parsed);
                         }
                         const diff = autoDiffNetlists(lastNetlistRef.current, block);
-                        if (diff) return diff;
+                        if (diff) return filterRedundantCorrections(diff);
                     } catch {}
                 }
                 return null;
@@ -1808,19 +1842,16 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             const resolveCorrections = (content: string): any[] | null => {
                 if (!hasNetlist) return null;
                 
-                // Try to find any code block
                 const matches = [...content.matchAll(/```(?:json|corrections)?\s*([\s\S]*?)```/g)];
                 for (const m of matches) {
                     const block = m[1].trim();
                     try {
                         const parsed = JSON.parse(block);
-                        // 1. Direct Corrections Array
                         if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].to && parsed[0].type) {
-                            return parsed;
+                            return filterRedundantCorrections(parsed);
                         }
-                        // 2. Full Netlist Auto-Diff
                         const diff = autoDiffNetlists(lastNetlistRef.current, block);
-                        if (diff) return diff;
+                        if (diff) return filterRedundantCorrections(diff);
                     } catch {}
                 }
                 return null;

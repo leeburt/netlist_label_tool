@@ -87,8 +87,8 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             return c;
         });
         
-        // Use current netlist state as baseline to prevent rolling back user changes
-        const currentBaseline = getNetlist();
+        // Always use stored baseline to ensure toggling off can fully revert changes
+        const currentBaseline = msg.baseline || getNetlist();
         const result = applyCorrectionItems(currentBaseline, msg.corrections, newChecked);
         onApplyNetlist(result, !firstApply, msg.fileId);
     };
@@ -104,8 +104,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             return c;
         });
         
-        // Use current netlist state as baseline to prevent rolling back user changes
-        const currentBaseline = getNetlist();
+        const currentBaseline = msg.baseline || getNetlist();
         const result = applyCorrectionItems(currentBaseline, msg.corrections, newChecked);
         onApplyNetlist(result, !firstApply, msg.fileId);
     };

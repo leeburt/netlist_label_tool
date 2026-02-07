@@ -1,0 +1,18 @@
+创建工具函数目录 (src/utils/):
+constants.ts: 存放常量配置（默认组件类型、LLM配置等）。
+commonUtils.ts: 通用辅助函数（如 deepMergeObj, getId）。
+colorUtils.ts: 颜色生成和处理逻辑。
+netlistUtils.ts: 核心的网表处理逻辑（Python数据转换、Diff算法、自动校正等）。
+创建组件目录 (src/components/):
+将各个独立的 UI 组件提取为单独的文件：
+AutocompleteInput.tsx: 自动补全输入框。
+Notification.tsx: 消息通知组件。
+SettingsDialog.tsx: 设置对话框。
+ModalDialog.tsx: 通用模态框（用于新建组件/端口、确认合并等）。
+ConnectionSegment.tsx: 连线绘制组件。
+RightSidebar.tsx: 右侧侧边栏（标签管理与筛选）。
+NetlistDiffTable.tsx: 网表差异对比表格。
+LLMChatPanel.tsx: AI 助手对话面板（包含复杂的聊天与修正逻辑）。
+精简 src/App.tsx:
+主文件现在只包含核心的应用状态管理 (App 组件) 和顶层布局逻辑。
+所有辅助功能和子组件都通过 import 引入，代码结构更加清晰，易于阅读和维护。

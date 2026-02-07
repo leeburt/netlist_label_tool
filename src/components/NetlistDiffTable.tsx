@@ -18,8 +18,8 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll, onI
         if (c.type === 'del') return [{ field: '整项', old: '存在', val: '删除' }];
         if (c.type === 'add') {
             if (!c.content) return [{ field: '整项', old: '-', val: '新增' }];
-            return Object.keys(c.content).slice(0, 3).map(k => ({
-                field: k, old: '-', val: typeof c.content[k] === 'object' ? JSON.stringify(c.content[k]).slice(0, 30) : String(c.content[k])
+            return Object.keys(c.content).map(k => ({
+                field: k, old: '-', val: typeof c.content[k] === 'object' ? JSON.stringify(c.content[k]) : String(c.content[k])
             }));
         }
         // For connection renames: show rename_to/name/key as "重命名" directly
@@ -40,7 +40,7 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll, onI
                 } else {
                     const ov = ref?.[k], nv = obj[k];
                     if (JSON.stringify(ov) !== JSON.stringify(nv))
-                        diffs.push({ field: path, old: ov === undefined ? '-' : typeof ov === 'object' ? JSON.stringify(ov).slice(0, 25) : String(ov), val: typeof nv === 'object' ? JSON.stringify(nv).slice(0, 25) : String(nv) });
+                        diffs.push({ field: path, old: ov === undefined ? '-' : typeof ov === 'object' ? JSON.stringify(ov) : String(ov), val: typeof nv === 'object' ? JSON.stringify(nv) : String(nv) });
                 }
             }
         };

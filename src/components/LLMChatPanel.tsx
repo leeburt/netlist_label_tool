@@ -4,7 +4,7 @@ import { DEFAULT_LLM_HOST, DEFAULT_LLM_MODELS, DEFAULT_LLM_SYSTEM_PROMPT, LLM_PR
 import { reactStateToPythonData, applyCorrectionItems, filterRedundantCorrections, autoDiffNetlists } from '../utils/netlistUtils';
 import NetlistDiffTable from './NetlistDiffTable';
 
-const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist, bgImage, notify, onHighlight }: any) => {
+const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist, bgImage, notify, onHighlight, currentFileId }: any) => {
     const [settings, setSettings] = useState(() => {
         try { 
             const s = localStorage.getItem('llm_settings'); 
@@ -43,13 +43,23 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
     const endRef = useRef<HTMLDivElement>(null);
     const abortRef = useRef<AbortController | null>(null);
     const lastNetlistRef = useRef<string>('{}');
+    const prevMsgsLen = useRef(0);
+
+    // Remove setMsgs([]) to keep history, but we need to track file context
 
     useEffect(() => { localStorage.setItem('llm_settings', JSON.stringify(settings)); }, [settings]);
-    useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs]);
+    
+    // Auto-scroll only on new messages or during loading (streaming), not on local state updates like checkbox toggles
+    useEffect(() => { 
+        if (msgs.length > prevMsgsLen.current || loading) {
+            endRef.current?.scrollIntoView({ behavior: 'smooth' }); 
+        }
+        prevMsgsLen.current = msgs.length;
+    }, [msgs, loading]);
 
     const getNetlist = () => { try { return reactStateToPythonData(nodes, edges, extraData); } catch { return '{}'; } };
 
-    const extractAndApplyAll = (text: string, startFrom: number = 0): number => {
+    const extractAndApplyAll = (text: string, startFrom: number = 0, msgFileId?: string): number => {
         const matches = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
         let applied = startFrom;
         for (let i = startFrom; i < matches.length; i++) {
@@ -57,7 +67,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                 const block = matches[i][1].trim();
                 if (block.startsWith('{') || block.startsWith('[')) {
                     JSON.parse(block); 
-                    onApplyNetlist(block); 
+                    onApplyNetlist(block, false, msgFileId); 
                     applied = i + 1; 
                 }
             } catch {}
@@ -77,7 +87,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             return c;
         });
         const result = applyCorrectionItems(msg.baseline, msg.corrections, newChecked);
-        onApplyNetlist(result, !firstApply);
+        onApplyNetlist(result, !firstApply, msg.fileId);
     };
 
     const handleCorrectionToggleAll = (msgIdx: number, val: boolean) => {
@@ -91,7 +101,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             return c;
         });
         const result = applyCorrectionItems(msg.baseline, msg.corrections, newChecked);
-        onApplyNetlist(result, !firstApply);
+        onApplyNetlist(result, !firstApply, msg.fileId);
     };
     
     // Handle item click for highlighting
@@ -139,11 +149,13 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
     const handleResend = async (index: number, newContent: string) => {
         setEditingMsgIndex(null);
         if (!newContent.trim()) return;
+        
+        const contextFileId = currentFileId; // Assume resend is in current context
 
         // Truncate history up to this message
         const history = msgs.slice(0, index);
         const oldMsg = msgs[index];
-        const updatedMsg = { ...oldMsg, content: newContent };
+        const updatedMsg = { ...oldMsg, content: newContent, fileId: contextFileId };
         
         // Update state with truncated history + updated message
         const newMsgs = [...history, updatedMsg];
@@ -225,10 +237,10 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                 const reasoning = data.choices?.[0]?.message?.reasoning_content || '';
                 const corrs = resolveCorrections(content);
                 if (corrs) {
-                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false), reasoning }]);
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false), reasoning, fileId: contextFileId }]);
                 } else {
-                    const applied = !newHasNetlist && extractAndApplyAll(content, 0) > 0;
-                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied, reasoning }]);
+                    const applied = !newHasNetlist && extractAndApplyAll(content, 0, contextFileId) > 0;
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied, reasoning, fileId: contextFileId }]);
                 }
                 return;
             }
@@ -238,7 +250,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             let full = '';
             let fullReasoning = '';
             let appliedBlocks = 0;
-            setMsgs(prev => [...prev, { role: 'assistant', content: '', ts: Date.now() }]);
+            setMsgs(prev => [...prev, { role: 'assistant', content: '', ts: Date.now(), fileId: contextFileId }]);
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -255,7 +267,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                     } catch {}
                 }
                 if (!newHasNetlist) {
-                    const newApplied = extractAndApplyAll(full, appliedBlocks);
+                    const newApplied = extractAndApplyAll(full, appliedBlocks, contextFileId);
                     if (newApplied > appliedBlocks) {
                         appliedBlocks = newApplied;
                         setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
@@ -267,7 +279,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             if (corrs) {
                 setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false) }; return c; });
             } else if (!newHasNetlist) {
-                const finalApplied = extractAndApplyAll(full, appliedBlocks);
+                const finalApplied = extractAndApplyAll(full, appliedBlocks, contextFileId);
                 if (finalApplied > appliedBlocks) {
                     setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
                 }
@@ -284,9 +296,11 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         if (!input.trim() || loading) return;
         if (!settings.apiKey) { notify?.('请先配置 API Key'); setCfgOpen(true); return; }
 
+        const contextFileId = currentFileId;
+
         const hasNetlist = input.includes('@网表');
         const hasImage = input.includes('@原图');
-        const userMsg = { role: 'user', content: input, ts: Date.now(), hasNetlist, hasImage };
+        const userMsg = { role: 'user', content: input, ts: Date.now(), hasNetlist, hasImage, fileId: contextFileId };
         const newMsgs = [...msgs, userMsg];
         setMsgs(newMsgs);
         setInput('');
@@ -353,10 +367,10 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                 const reasoning = data.choices?.[0]?.message?.reasoning_content || '';
                 const corrs = resolveCorrections(content);
                 if (corrs) {
-                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false), reasoning }]);
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false), reasoning, fileId: contextFileId }]);
                 } else {
-                    const applied = !hasNetlist && extractAndApplyAll(content, 0) > 0;
-                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied, reasoning }]);
+                    const applied = !hasNetlist && extractAndApplyAll(content, 0, contextFileId) > 0;
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied, reasoning, fileId: contextFileId }]);
                 }
                 return;
             }
@@ -366,7 +380,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             let full = '';
             let fullReasoning = '';
             let appliedBlocks = 0;
-            setMsgs(prev => [...prev, { role: 'assistant', content: '', ts: Date.now() }]);
+            setMsgs(prev => [...prev, { role: 'assistant', content: '', ts: Date.now(), fileId: contextFileId }]);
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -384,7 +398,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                 }
                 // Only auto-apply JSON during streaming if NOT in netlist mode
                 if (!hasNetlist) {
-                    const newApplied = extractAndApplyAll(full, appliedBlocks);
+                    const newApplied = extractAndApplyAll(full, appliedBlocks, contextFileId);
                     if (newApplied > appliedBlocks) {
                         appliedBlocks = newApplied;
                         setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
@@ -397,7 +411,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             if (corrs) {
                 setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false) }; return c; });
             } else if (!hasNetlist) {
-                const finalApplied = extractAndApplyAll(full, appliedBlocks);
+                const finalApplied = extractAndApplyAll(full, appliedBlocks, contextFileId);
                 if (finalApplied > appliedBlocks) {
                     setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
                 }

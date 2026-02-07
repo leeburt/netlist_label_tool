@@ -21,7 +21,9 @@ export const DEFAULT_LLM_SYSTEM_PROMPT = `你是一个专业的电路设计助�
     - external_ports: 外部端口字典，key为端口ID，含 name, type, center
     - connection: 网络连接字典，key为网络名，含 ports 和 pixels
     
-    【重要规则】当用户要求修改、校对、检查、修复、优化网表时，你**必须**使用corrections结构化格式返回修改建议。
+    【重要规则】
+    1. 识别必须严格忠实于图片内容，特别是器件名称(name)和网络名称，必须完全依据图片上的文字标注，严禁依据电路逻辑或经验进行臆测。同时网络和组件名字是公式的话用latex格式表示。
+    2. 当用户要求修改、校对、检查、修复、优化网表时，你**必须**使用corrections结构化格式返回修改建议。
     **绝对禁止**返回完整的网表JSON数据。仅返回需要修改的部分。
     用 \`\`\`corrections 代码块包裹一个JSON数组 (不要使用 \`\`\`json):
     \`\`\`corrections
@@ -53,6 +55,6 @@ export const DEFAULT_LLM_SYSTEM_PROMPT = `你是一个专业的电路设计助�
 export const LLM_PRESETS = [
     { icon: '✅', label: '校对网表', prompt: '@网表 @原图  请校对当前网表，检查器件类型、端口连接、网络命名等是否有错误，以corrections格式返回修改建议。' },
     { icon: '🔍', label: '检查器件的类型', prompt: '@网表 @原图 帮我check所有器件的类型，器件的名字字段是component_type是否正确' },
-    { icon: '🔧', label: '修复网络名称', prompt: '@网表 @原图 请修复当前网表中的网络名称，以corrections格式返回修正建议。此时type是modify，然后修改网络的本身的key值' },
+    { icon: '🔧', label: '修复网络名称', prompt: '@网表 @原图 请修复当前网表中的网络名称，以corrections格式返回修正建议。此时type是modify，然后修改网络的本身的key值。网络名字忠实于图片上的文字标注。如果没有文字与其对应的，则保持原样。' },
     { icon: '📝', label: '检查器件名字', prompt: '@网表 @原图 帮我check所有器件的名字，器件的名字字段是name是否正确' },
 ];

@@ -39,14 +39,14 @@ const RightSidebar = ({
         setNewItemName('');
     };
 
-    const filteredNodes = nodes.filter((n: any) => {
+    const filteredNodes = useMemo(() => nodes.filter((n: any) => {
         if (n.type === 'net_node') return false;
         const label = n.data.label || '';
         const type = n.data.type || '';
         if (hiddenTypes.has(type)) return false;
         if (searchTerm && !label.toLowerCase().includes(searchTerm.toLowerCase()) && !type.toLowerCase().includes(searchTerm.toLowerCase())) return false;
         return true;
-    });
+    }), [nodes, hiddenTypes, searchTerm]);
 
     const groupedNodes = useMemo(() => {
         const groups: any = {};

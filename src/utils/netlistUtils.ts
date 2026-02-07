@@ -1,10 +1,20 @@
-import { deepMergeObj, getId } from './commonUtils';
+import { deepMergeObj, getId, safeJsonParse } from './commonUtils';
 import { SNAPPING_THRESHOLD } from './constants';
 
 export const mergeConnectionData = (existing: any, incoming: any) => {
     const merged = deepMergeObj(existing, incoming);
     if (existing.ports && Array.isArray(existing.ports) && incoming.ports && Array.isArray(incoming.ports)) {
-        merged.ports = Array.from(new Set([...existing.ports, ...incoming.ports]));
+        // Dedup ports array: [ ['dev1', 'p1'], ['dev1', 'p1'] ] -> [ ['dev1', 'p1'] ]
+        const sigs = new Set();
+        const combined = [];
+        for (const p of [...existing.ports, ...incoming.ports]) {
+            const sig = JSON.stringify(p);
+            if (!sigs.has(sig)) {
+                sigs.add(sig);
+                combined.push(p);
+            }
+        }
+        merged.ports = combined;
     }
     if (existing.pixels && Array.isArray(existing.pixels) && incoming.pixels && Array.isArray(incoming.pixels)) {
          merged.pixels = [...existing.pixels, ...incoming.pixels];
@@ -15,12 +25,50 @@ export const mergeConnectionData = (existing: any, incoming: any) => {
 export const applyCorrectionItems = (baselineJson: string, items: any[], checked: boolean[]): string => {
     const data = JSON.parse(baselineJson);
     const connRenames = new Map<string, string>(); // oldKey -> newKey
+
+    // Helper to find key robustly
+    const findKey = (obj: any, key: string) => {
+        if (!obj) return null;
+        if (obj[key]) return key;
+        const normalized = key.trim().toLowerCase();
+        return Object.keys(obj).find(k => k.trim().toLowerCase() === normalized) || null;
+    };
+
     items.forEach((c, i) => {
         if (!checked[i]) return;
         if (c.to === 'ckt_netlist') {
             if (c.type === 'modify') {
-                const idx = (data.ckt_netlist || []).findIndex((item: any) => item.id === c.key);
-                if (idx >= 0) data.ckt_netlist[idx] = deepMergeObj(data.ckt_netlist[idx], c.content || {});
+                // ckt_netlist is array, find by id
+                const idx = (data.ckt_netlist || []).findIndex((item: any) => item.id === c.key || item.id === c.key.trim());
+                if (idx >= 0) {
+                    const comp = data.ckt_netlist[idx];
+                    // Sync port_connection changes to connection map to ensure graph consistency
+                    if (c.content && c.content.port_connection) {
+                        const compName = comp.name || comp.device_name;
+                        for (const [portName, newNet] of Object.entries(c.content.port_connection)) {
+                            const oldNet = comp.port_connection?.[portName];
+                            if (oldNet && oldNet !== newNet) {
+                                // Remove from oldNet (robust lookup)
+                                if (data.connection) {
+                                    const oldNetKey = findKey(data.connection, oldNet);
+                                    if (oldNetKey && data.connection[oldNetKey].ports) {
+                                        data.connection[oldNetKey].ports = data.connection[oldNetKey].ports.filter((p: any) => !(p[0] === compName && p[1] === portName));
+                                    }
+                                }
+                                // Add to newNet
+                                if (!data.connection) data.connection = {};
+                                // Ensure newNet key exists
+                                const newNetKey = newNet as string;
+                                if (!data.connection[newNetKey]) data.connection[newNetKey] = { ports: [], pixels: [] };
+                                if (!data.connection[newNetKey].ports) data.connection[newNetKey].ports = [];
+                                
+                                const exists = data.connection[newNetKey].ports.some((p: any) => p[0] === compName && p[1] === portName);
+                                if (!exists) data.connection[newNetKey].ports.push([compName, portName]);
+                            }
+                        }
+                    }
+                    data.ckt_netlist[idx] = deepMergeObj(data.ckt_netlist[idx], c.content || {});
+                }
             } else if (c.type === 'del') {
                 data.ckt_netlist = (data.ckt_netlist || []).filter((item: any) => item.id !== c.key);
             } else if (c.type === 'add') {
@@ -28,63 +76,65 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
             }
         } else if (c.to === 'connection') {
             data.connection = data.connection || {};
-            if (c.type === 'modify' && data.connection[c.key]) {
-                const merged = deepMergeObj(data.connection[c.key], c.content || {});
+            const realKey = findKey(data.connection, c.key);
+            
+            if (c.type === 'modify' && realKey) {
+                const merged = deepMergeObj(data.connection[realKey], c.content || {});
                 const newKey = merged.key || merged.rename_to || merged.name;
-                if (newKey && newKey !== c.key) {
+                
+                if (newKey && newKey !== realKey) {
+                    // Clean up special properties from the merged object
                     delete merged.key;
                     delete merged.rename_to;
                     delete merged.name;
-                    delete data.connection[c.key];
                     
+                    // Remove old key
+                    delete data.connection[realKey];
+                    
+                    // Assign to new key (merge if exists)
                     if (data.connection[newKey]) {
                         data.connection[newKey] = mergeConnectionData(data.connection[newKey], merged);
                     } else {
                         data.connection[newKey] = merged;
                     }
-                    connRenames.set(c.key, newKey);
+                    
+                    // Record rename for ckt_netlist propagation using REAL key
+                    connRenames.set(realKey, newKey);
                 } else {
                     delete merged.rename_to;
                     delete merged.name;
-                    data.connection[c.key] = merged;
+                    data.connection[realKey] = merged;
                 }
             }
-            else if (c.type === 'del') delete data.connection[c.key];
+            else if (c.type === 'del' && realKey) delete data.connection[realKey];
             else if (c.type === 'add') {
                 const content = c.content || {};
                 const addKey = content.key || content.rename_to || content.name;
-                if (addKey && addKey !== c.key) {
-                    const newContent = { ...content };
-                    delete newContent.key;
-                    delete newContent.rename_to;
-                    delete newContent.name;
-                    
-                    if (data.connection[addKey]) {
-                        data.connection[addKey] = mergeConnectionData(data.connection[addKey], newContent);
-                    } else {
-                        data.connection[addKey] = newContent;
-                    }
+                const targetKey = addKey || c.key;
+                
+                // If renaming during add (rare but possible in some diffs)
+                const newContent = { ...content };
+                delete newContent.key;
+                delete newContent.rename_to;
+                delete newContent.name;
+
+                if (data.connection[targetKey]) {
+                    data.connection[targetKey] = mergeConnectionData(data.connection[targetKey], newContent);
                 } else {
-                    const newContent = { ...content };
-                    delete newContent.rename_to;
-                    delete newContent.name;
-                    
-                    if (data.connection[c.key]) {
-                        data.connection[c.key] = mergeConnectionData(data.connection[c.key], newContent);
-                    } else {
-                        data.connection[c.key] = newContent;
-                    }
+                    data.connection[targetKey] = newContent;
                 }
             }
         } else if (c.to === 'external_ports') {
             data.external_ports = data.external_ports || {};
-            if (c.type === 'modify' && data.external_ports[c.key]) {
-                const merged = deepMergeObj(data.external_ports[c.key], c.content || {});
+            const realKey = findKey(data.external_ports, c.key);
+
+            if (c.type === 'modify' && realKey) {
+                const merged = deepMergeObj(data.external_ports[realKey], c.content || {});
                 const newKey = merged.key || merged.rename_to;
-                if (newKey && newKey !== c.key) {
+                if (newKey && newKey !== realKey) {
                     delete merged.key;
                     delete merged.rename_to;
-                    delete data.external_ports[c.key];
+                    delete data.external_ports[realKey];
                     
                     if (data.external_ports[newKey]) {
                          data.external_ports[newKey] = deepMergeObj(data.external_ports[newKey], merged);
@@ -93,32 +143,23 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                     }
                 } else {
                     delete merged.rename_to;
-                    data.external_ports[c.key] = merged;
+                    data.external_ports[realKey] = merged;
                 }
             }
-            else if (c.type === 'del') delete data.external_ports[c.key];
+            else if (c.type === 'del' && realKey) delete data.external_ports[realKey];
             else if (c.type === 'add') {
                 const content = c.content || {};
                 const addKey = content.key || content.rename_to;
-                if (addKey && addKey !== c.key) {
-                    const newContent = { ...content };
-                    delete newContent.key;
-                    delete newContent.rename_to;
-                    
-                    if (data.external_ports[addKey]) {
-                        data.external_ports[addKey] = deepMergeObj(data.external_ports[addKey], newContent);
-                    } else {
-                        data.external_ports[addKey] = newContent;
-                    }
+                const targetKey = addKey || c.key;
+                
+                const newContent = { ...content };
+                delete newContent.key;
+                delete newContent.rename_to;
+                
+                if (data.external_ports[targetKey]) {
+                    data.external_ports[targetKey] = deepMergeObj(data.external_ports[targetKey], newContent);
                 } else {
-                    const newContent = { ...content };
-                    delete newContent.rename_to;
-                    
-                    if (data.external_ports[c.key]) {
-                        data.external_ports[c.key] = deepMergeObj(data.external_ports[c.key], newContent);
-                    } else {
-                        data.external_ports[c.key] = newContent;
-                    }
+                    data.external_ports[targetKey] = newContent;
                 }
             }
         }
@@ -129,7 +170,19 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
             if (!comp.port_connection) return;
             for (const portName of Object.keys(comp.port_connection)) {
                 const oldNet = comp.port_connection[portName];
-                if (connRenames.has(oldNet)) comp.port_connection[portName] = connRenames.get(oldNet);
+                // Check exact or robust match
+                if (connRenames.has(oldNet)) {
+                    comp.port_connection[portName] = connRenames.get(oldNet);
+                } else {
+                    // Try robust match for oldNet in case ckt_netlist has weird spacing
+                    // We need to check if ANY key in connRenames matches this robust key
+                    for (const [renamedOld, renamedNew] of connRenames) {
+                        if (renamedOld.trim().toLowerCase() === oldNet.trim().toLowerCase()) {
+                            comp.port_connection[portName] = renamedNew;
+                            break;
+                        }
+                    }
+                }
             }
         });
     }
@@ -289,7 +342,8 @@ export const autoDiffNetlists = (baselineJson: string, newJson: string): any[] |
 // --- 1. Data Processing (Python <-> React) ---
 export const pythonDataToReactState = (jsonStr: string) => {
   try {
-    const data = JSON.parse(jsonStr);
+    const data = safeJsonParse(jsonStr);
+    if (!data) return null;
     let nodes: any[] = [];
     let edges: any[] = [];
     let mergeReport = new Set<string>();
@@ -451,12 +505,22 @@ export const pythonDataToReactState = (jsonStr: string) => {
         Object.entries(comp.port || {}).forEach(([portName, portInfo]: [string, any]) => {
             const center = portInfo.center;
             const pId = getId();
+            // Read explicit connection if available to ensure robust connectivity reconstruction
+            // This is crucial when net names are renamed via LLM but pixels remain identical
+            const connectedNet = comp.port_connection?.[portName];
+
             nodes.push({
                 id: pId,
                 type: 'port',
                 position: { x: center[0], y: center[1] },
                 parentId: compId,
-                data: { label: portName, type: portInfo.type || "", isExternal: false, compName: comp.device_name }
+                data: { 
+                    label: portName, 
+                    type: portInfo.type || "", 
+                    isExternal: false, 
+                    compName: comp.device_name,
+                    netName: connectedNet
+                }
             });
         });
     });

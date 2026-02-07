@@ -54,9 +54,16 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'system'); // 'light', 'dark', 'system'
   const [appSettings, setAppSettings] = useState({ defaultLineWidth: 2, defaultBoxOpacity: 0.2, showCrosshair: true });
   const [showSettings, setShowSettings] = useState(false);
-  const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 }); // Mouse position in world coords
-  const [screenCursor, setScreenCursor] = useState({ x: -100, y: -100 }); // For Crosshair
-  const [hoveredNode, setHoveredNode] = useState<any>(null); // For Tooltip
+  
+  // OPTIMIZATION: Use Refs for Cursor/Tooltip to avoid re-renders
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const crosshairVRef = useRef<HTMLDivElement>(null);
+  const crosshairHRef = useRef<HTMLDivElement>(null);
+  const statusBarPosRef = useRef<HTMLSpanElement>(null);
+  const [hoveredNode, setHoveredNode] = useState<any>(null); // For Tooltip content only
+  
+  // Keep track of cursor pos in ref for non-render logic
+  const cursorPosRef = useRef({ x: 0, y: 0 });
 
   
   // --- File System State ---
@@ -212,6 +219,8 @@ export default function App() {
 
   const handleSaveToServer = async () => {
       // 1. Get current netlist data
+      // No need to convert to string and back for internal logic if we can help it, but existing Utils do expect string input in some places.
+      // Optimizing: Use object directly if possible, or single conversion.
       const jsonStr = reactStateToPythonData(nodes, edges, extraTaskData);
       let jsonData;
       try {
@@ -581,7 +590,7 @@ export default function App() {
       img.src = bgImage;
   }, [bgImage]);
 
-  const loadFile = (index: number, sourceList = fileList) => {
+  const loadFile = (index: number, sourceList = fileList, overrideJson?: string) => {
     if (index < 0 || index >= sourceList.length) return;
     const fileObj = sourceList[index];
 
@@ -589,7 +598,16 @@ export default function App() {
     reader.onload = (e) => {
         if (!e.target) return;
         setBgImage(e.target.result as any);
-        if (!fileObj.data) {
+        if (overrideJson) {
+            const res = pythonDataToReactState(overrideJson);
+            if (res) {
+                setNodes(res.nodes);
+                setEdges(res.edges);
+                if (res.extraData) setExtraTaskData(res.extraData);
+                setPast([]); setFuture([]);
+                setNotification("✨ AI 已自动更新网表 (已切换文件)");
+            }
+        } else if (!fileObj.data) {
             const img = new Image();
             img.onload = () => {
                 if (containerRef.current) {
@@ -603,7 +621,9 @@ export default function App() {
     };
     reader.readAsDataURL(fileObj.imgFile);
 
-    if (fileObj.data) {
+    if (overrideJson) {
+        // Handled in reader.onload
+    } else if (fileObj.data) {
         setNodes(fileObj.data.nodes);
         setEdges(fileObj.data.edges);
         setPast([]); setFuture([]);
@@ -723,7 +743,16 @@ export default function App() {
     setFuture([]); 
   }, [nodes, edges]);
 
-  const handleApplyLLMNetlist = (jsonStr: string, skipHistory = false) => {
+  const handleApplyLLMNetlist = (jsonStr: string, skipHistory = false, targetFileId?: string) => {
+      if (targetFileId && fileList[currentFileIndex]?.id !== targetFileId) {
+          const idx = fileList.findIndex(f => f.id === targetFileId);
+          if (idx !== -1) {
+              saveCurrentStateToMemory();
+              loadFile(idx, fileList, jsonStr);
+              return;
+          }
+      }
+
       const result = pythonDataToReactState(jsonStr);
       if (result) {
           if (!skipHistory) saveHistory();
@@ -1005,8 +1034,20 @@ export default function App() {
 
   const handleMouseMove = (e: any) => {
     const { x: wx, y: wy } = screenToWorld(e.clientX, e.clientY);
-    setCursorPos({ x: Math.round(wx), y: Math.round(wy) }); 
-    setScreenCursor({ x: e.clientX, y: e.clientY });
+    
+    // OPTIMIZATION: Direct DOM updates
+    cursorPosRef.current = { x: Math.round(wx), y: Math.round(wy) };
+    if (statusBarPosRef.current) statusBarPosRef.current.innerText = `${Math.round(wx)}, ${Math.round(wy)}`;
+    
+    if (appSettings.showCrosshair) {
+        if (crosshairVRef.current) crosshairVRef.current.style.left = `${e.clientX}px`;
+        if (crosshairHRef.current) crosshairHRef.current.style.top = `${e.clientY}px`;
+    }
+    
+    if (tooltipRef.current) {
+        tooltipRef.current.style.left = `${e.clientX + 15}px`;
+        tooltipRef.current.style.top = `${e.clientY + 15}px`;
+    }
 
     // --- Hover Detection ---
     if (!dragState && !dialog.isOpen) {
@@ -1376,16 +1417,18 @@ export default function App() {
         <ModalDialog isOpen={dialog.isOpen} type={dialog.type} data={dialog.data} options={dialog.options} initialName={dialog.initialName} initialType={dialog.initialType} position={dialog.position} onConfirm={dialog.onConfirm || handleDialogConfirm} onCancel={dialog.onCancel || (() => setDialog({ isOpen: false }))} />
         <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} appSettings={appSettings} setAppSettings={setAppSettings} theme={theme} setTheme={setTheme} />
         
-        {/* Hover Tooltip */}
-        {hoveredNode && !dragState && !dialog.isOpen && (
-            <div className="fixed z-[100] pointer-events-none bg-slate-900/90 backdrop-blur text-white text-xs p-2 rounded border border-slate-700 shadow-xl"
-                 style={{ left: screenCursor.x + 15, top: screenCursor.y + 15 }}>
+        {/* Hover Tooltip - Optimized with Ref */}
+        <div ref={tooltipRef} className={`fixed z-[100] pointer-events-none bg-slate-900/90 backdrop-blur text-white text-xs p-2 rounded border border-slate-700 shadow-xl ${!hoveredNode || dragState || dialog.isOpen ? 'hidden' : ''}`}
+                style={{ left: -1000, top: -1000 }}>
+            {hoveredNode && (
+                <>
                 <div className="font-bold text-blue-300 mb-0.5">{hoveredNode.type === 'component' ? 'Component' : (hoveredNode.type === 'port' ? 'Port' : 'Net Node')}</div>
                 <div className="font-mono">{hoveredNode.data?.label || hoveredNode.id}</div>
                 {hoveredNode.data?.type && <div className="text-slate-400">{hoveredNode.data.type}</div>}
                 {hoveredNode.data?.netName && <div className="text-green-400 mt-1">Net: {hoveredNode.data.netName}</div>}
-            </div>
-        )}
+                </>
+            )}
+        </div>
 
         {/* Global Datalists removed - replaced by AutocompleteInput */}
 
@@ -1456,7 +1499,7 @@ export default function App() {
                         {filteredFiles.length === 0 ? <div className="p-4 text-center text-slate-400 dark:text-slate-600 text-[10px] italic">No files loaded</div> : (
                             <div className="flex flex-col">
                                 {filteredFiles.map((f) => {
-                                    const realIdx = fileList.indexOf(f);
+                                    const realIdx = fileList.findIndex(x => x.id === f.id);
                                     const isActive = realIdx === currentFileIndex;
                                     return (
                                         <div key={f.id} onClick={() => { saveCurrentStateToMemory(); loadFile(realIdx); }} 
@@ -1608,11 +1651,16 @@ export default function App() {
                                             <input className={`w-full bg-slate-50 dark:bg-slate-800 border rounded px-2 py-1.5 text-sm text-slate-900 dark:text-slate-200 outline-none focus:border-blue-500 placeholder-slate-400 dark:placeholder-slate-600 ${conflicts.has(singleSelected.id) ? 'border-red-500/50 bg-red-900/10' : 'border-slate-200 dark:border-slate-700'}`} 
                                                 value={singleSelected.data?.netName || ''} 
                                                 onChange={e => {  
-                                                    saveHistory(); 
                                                     const v = e.target.value;
                                                     if (singleSelected.type === 'net_edge') {
+                                                        if (!v || v.trim() === '') {
+                                                            setNotification("警告：线段必须包含网络名称，无法清空。");
+                                                            return;
+                                                        }
+                                                        saveHistory();
                                                         propagateNetRename(singleSelected.id, v);
                                                     } else {
+                                                        saveHistory();
                                                         setNodes((prev: any[]) => prev.map(n => n.id === singleSelected.id ? { ...n, data: { ...n.data, netName: v } } : n));
                                                     }
                                                 }} 
@@ -1696,11 +1744,11 @@ export default function App() {
                     }} 
                 />
 
-                {/* Crosshair Overlay */}
+                {/* Crosshair Overlay - Optimized with Refs */}
                 {appSettings.showCrosshair && (
                     <div className="fixed inset-0 pointer-events-none z-[100] overflow-hidden">
-                        <div className="absolute bg-blue-500/30" style={{ left: screenCursor.x, top: 0, bottom: 0, width: 1 }}></div>
-                        <div className="absolute bg-blue-500/30" style={{ top: screenCursor.y, left: 0, right: 0, height: 1 }}></div>
+                        <div ref={crosshairVRef} className="absolute bg-blue-500/30" style={{ left: -100, top: 0, bottom: 0, width: 1 }}></div>
+                        <div ref={crosshairHRef} className="absolute bg-blue-500/30" style={{ top: -100, left: 0, right: 0, height: 1 }}></div>
                     </div>
                 )}
 
@@ -1827,7 +1875,7 @@ export default function App() {
                      <div className="flex gap-4">
                          <span>ZOOM: {Math.round(transform.k * 100)}%</span>
                          <span>MODE: {mode}</span>
-                         <span>POS: {cursorPos.x}, {cursorPos.y}</span>
+                         <span>POS: <span ref={statusBarPosRef}>0, 0</span></span>
                      </div>
                      <div className="flex gap-3">
                          <span className={showLabels ? 'text-blue-600 dark:text-blue-400 font-bold' : ''}>LABELS (L)</span>
@@ -1865,6 +1913,7 @@ export default function App() {
                 bgImage={bgImage}
                 notify={setNotification}
                 onHighlight={(ids: any) => setSelectedIds(new Set(ids))}
+                currentFileId={fileList[currentFileIndex]?.id}
             />
         </div>
     </div>

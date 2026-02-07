@@ -932,8 +932,19 @@ export default function App() {
     if (selectedIds.size === 1) {
         const selId = [...selectedIds][0];
         const selNode = nodes.find(n => n.id === selId);
-        if (selNode?.type === 'component' && Math.hypot(selNode.position.x + selNode.width - wx, selNode.position.y + selNode.height - wy) < clickThreshold * 1.5) {
-            hitResizeHandle = selNode;
+        if (selNode?.type === 'component') {
+            const corners = [
+                { name: 'TL', x: selNode.position.x, y: selNode.position.y },
+                { name: 'TR', x: selNode.position.x + selNode.width, y: selNode.position.y },
+                { name: 'BL', x: selNode.position.x, y: selNode.position.y + selNode.height },
+                { name: 'BR', x: selNode.position.x + selNode.width, y: selNode.position.y + selNode.height },
+            ];
+            for (const corner of corners) {
+                if (Math.hypot(corner.x - wx, corner.y - wy) < clickThreshold * 1.5) {
+                    hitResizeHandle = { node: selNode, corner: corner.name };
+                    break;
+                }
+            }
         }
     }
     
@@ -971,8 +982,17 @@ export default function App() {
     }
 
     if (hitResizeHandle) {
-        saveHistory(); // Save before resizing
-        setDragState({ type: 'RESIZE', startX: e.clientX, startY: e.clientY, node: hitResizeHandle });
+        saveHistory();
+        const rn = hitResizeHandle.node;
+        const cn = hitResizeHandle.corner;
+        const fixedX = (cn === 'TL' || cn === 'BL') ? rn.position.x + rn.width : rn.position.x;
+        const fixedY = (cn === 'TL' || cn === 'TR') ? rn.position.y + rn.height : rn.position.y;
+        const childRels = nodes.filter(n => n.parentId === rn.id).map(n => ({
+            id: n.id,
+            relX: rn.width > 0 ? (n.position.x - rn.position.x) / rn.width : 0,
+            relY: rn.height > 0 ? (n.position.y - rn.position.y) / rn.height : 0,
+        }));
+        setDragState({ type: 'RESIZE', nodeId: rn.id, corner: cn, fixedX, fixedY, childRels });
     } else if (mode === MODE.VIEW) {
         if (hitNode || hitEdge) {
             const item = hitNode || hitEdge;
@@ -1103,9 +1123,19 @@ export default function App() {
             });
         });
     } else if (dragState.type === 'RESIZE') {
-        const dx = (e.clientX - dragState.startX) / transform.k, dy = (e.clientY - dragState.startY) / transform.k;
-        setNodes((prev: any[]) => prev.map(n => n.id === dragState.node.id ? { ...n, width: Math.max(20, dragState.node.width + dx), height: Math.max(20, dragState.node.height + dy) } : n));
-        setDragState((prev: any) => ({ ...prev, startX: e.clientX, startY: e.clientY, node: { ...dragState.node, width: Math.max(20, dragState.node.width + dx), height: Math.max(20, dragState.node.height + dy) } }));
+        const { corner, fixedX, fixedY, nodeId, childRels } = dragState;
+        let newX: number, newY: number, newW: number, newH: number;
+        if (corner === 'BR') { newX = fixedX; newY = fixedY; newW = Math.max(20, wx - fixedX); newH = Math.max(20, wy - fixedY); }
+        else if (corner === 'TL') { newW = Math.max(20, fixedX - wx); newH = Math.max(20, fixedY - wy); newX = fixedX - newW; newY = fixedY - newH; }
+        else if (corner === 'TR') { newX = fixedX; newW = Math.max(20, wx - fixedX); newH = Math.max(20, fixedY - wy); newY = fixedY - newH; }
+        else { /* BL */ newY = fixedY; newW = Math.max(20, fixedX - wx); newH = Math.max(20, wy - fixedY); newX = fixedX - newW; }
+        const relMap = new Map(childRels.map((c: any) => [c.id, c]));
+        setNodes((prev: any[]) => prev.map(n => {
+            if (n.id === nodeId) return { ...n, position: { x: newX, y: newY }, width: newW, height: newH };
+            const rel: any = relMap.get(n.id);
+            if (rel) return { ...n, position: { x: newX + rel.relX * newW, y: newY + rel.relY * newH } };
+            return n;
+        }));
     } else if (dragState.type === 'DRAW') {
         setDragState((prev: any) => ({ ...prev, currX: wx, currY: wy }));
     }
@@ -1818,6 +1848,14 @@ export default function App() {
                                                         {n.data.label}
                                                     </div>
                                                 </div>
+                                            </>
+                                        )}
+                                        {sel && (
+                                            <>
+                                                <div className="absolute w-2 h-2 bg-blue-500 border border-white rounded-sm z-10" style={{ left: -4, top: -4 }} />
+                                                <div className="absolute w-2 h-2 bg-blue-500 border border-white rounded-sm z-10" style={{ right: -4, top: -4 }} />
+                                                <div className="absolute w-2 h-2 bg-blue-500 border border-white rounded-sm z-10" style={{ left: -4, bottom: -4 }} />
+                                                <div className="absolute w-2 h-2 bg-blue-500 border border-white rounded-sm z-10" style={{ right: -4, bottom: -4 }} />
                                             </>
                                         )}
                                     </div>

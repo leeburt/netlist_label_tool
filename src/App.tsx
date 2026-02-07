@@ -6,7 +6,8 @@ import {
   Plus, Eye, EyeOff, AlertTriangle,
   FolderOpen, ChevronLeft, ChevronRight, Search, CheckCircle2,
   X, Layers, Info,
-  Moon, Sun, GripHorizontal, Monitor, Maximize
+  Moon, Sun, GripHorizontal, Monitor, Maximize,
+  Send, Bot, Sparkles, Zap, PanelRightClose, Check
 } from 'lucide-react';
 
 // --- 0. Utility Functions ---
@@ -17,6 +18,175 @@ const SNAPPING_THRESHOLD = 8;
 const DEFAULT_TYPES = ['NMOS', 'PMOS', 'RES', 'CAP', 'IND', 'VSOURCE', 'ISOURCE', 'GND', 'VDD'];
 const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS', 'MINUS', 'A', 'B', 'Y'];
 const DEFAULT_PORT_TYPES = ['port', 'gnd', 'vdd'];
+
+    const DEFAULT_LLM_SYSTEM_PROMPT = `你是一个专业的电路设计助手，可以回答各种问题。
+    当用户提供了电路网表数据(JSON格式)时，你可以分析和修改它。网表数据结构:
+    - ckt_netlist: 器件数组，每项含 id, device_name, component_type, bbox, port, port_connection, name, attribute
+    - external_ports: 外部端口字典，key为端口ID，含 name, type, center
+    - connection: 网络连接字典，key为网络名，含 ports 和 pixels
+    
+    【重要规则】当用户要求修改、校对、检查、修复、优化网表时，你**必须**使用corrections结构化格式返回修改建议。
+    **绝对禁止**返回完整的网表JSON数据。仅返回需要修改的部分。
+    用 \`\`\`corrections 代码块包裹一个JSON数组 (不要使用 \`\`\`json):
+    \`\`\`corrections
+[
+  {"to":"ckt_netlist","key":"#16","type":"modify","reason":"修正器件名称","content":{"name":"M1"}},
+  {"to":"ckt_netlist","key":"#0","type":"modify","reason":"修正类型","content":{"component_type":"NMOS"}},
+  {"to":"connection","key":"net14","type":"del","reason":"冗余连接"},
+  {"to":"external_ports","key":"#1","type":"add","reason":"缺少端口","content":{"name":"VIN","type":"port","center":[100,200]}}
+]
+\`\`\`
+字段说明:
+- to: 目标节(ckt_netlist / external_ports / connection)
+- key: ckt_netlist用id字段(如"#0","#16"), connection用网络名, external_ports用key
+- type: modify(部分更新,只需包含要改的字段) / del(删除) / add(新增,需完整内容)
+- reason: 简要说明修改原因
+- content: 修改/新增的内容(del类型可省略)
+
+每一条修改都是独立的一个对象。即使需要修改很多项，也要逐个列出。
+**不要返回完整的网表JSON，只返回需要修改的项。**
+对于非校对/非修改类问题，正常文字回答即可。`;
+
+const LLM_PRESETS = [
+    { icon: '✅', label: '校对网表', prompt: '@网表 @原图  请校对当前网表，检查器件类型、端口连接、网络命名等是否有错误，以corrections格式返回修改建议。' },
+    { icon: '🔍', label: '检查网表', prompt: '@网表 请检查当前网表数据是否有错误、缺失连接或端口命名问题。' },
+    { icon: '🔧', label: '修复问题', prompt: '@网表 请修复当前网表中的问题，以corrections格式返回修正建议。' },
+    { icon: '📝', label: '补全器件', prompt: '@网表 @原图 请根据电路拓扑结构，帮我添加可能缺失的器件和连接。' },
+    { icon: '📊', label: '网表摘要', prompt: '@网表 请总结当前网表的电路结构，列出所有器件及其连接关系。' },
+    { icon: '⚡', label: '优化连接', prompt: '@网表 请优化网表连接，合并冗余网络节点，以corrections格式返回优化建议。' },
+];
+
+// --- Corrections Utilities ---
+const deepMergeObj = (target: any, source: any): any => {
+    const result = { ...target };
+    for (const key of Object.keys(source)) {
+        if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])
+            && result[key] && typeof result[key] === 'object' && !Array.isArray(result[key])) {
+            result[key] = deepMergeObj(result[key], source[key]);
+        } else {
+            result[key] = source[key];
+        }
+    }
+    return result;
+};
+
+const applyCorrectionItems = (baselineJson: string, items: any[], checked: boolean[]): string => {
+    const data = JSON.parse(baselineJson);
+    items.forEach((c, i) => {
+        if (!checked[i]) return;
+        if (c.to === 'ckt_netlist') {
+            if (c.type === 'modify') {
+                const idx = (data.ckt_netlist || []).findIndex((item: any) => item.id === c.key);
+                if (idx >= 0) data.ckt_netlist[idx] = deepMergeObj(data.ckt_netlist[idx], c.content || {});
+            } else if (c.type === 'del') {
+                data.ckt_netlist = (data.ckt_netlist || []).filter((item: any) => item.id !== c.key);
+            } else if (c.type === 'add') {
+                (data.ckt_netlist = data.ckt_netlist || []).push({ id: c.key, ...c.content });
+            }
+        } else if (c.to === 'connection') {
+            data.connection = data.connection || {};
+            if (c.type === 'modify' && data.connection[c.key]) data.connection[c.key] = deepMergeObj(data.connection[c.key], c.content || {});
+            else if (c.type === 'del') delete data.connection[c.key];
+            else if (c.type === 'add') data.connection[c.key] = c.content || {};
+        } else if (c.to === 'external_ports') {
+            data.external_ports = data.external_ports || {};
+            if (c.type === 'modify' && data.external_ports[c.key]) data.external_ports[c.key] = deepMergeObj(data.external_ports[c.key], c.content || {});
+            else if (c.type === 'del') delete data.external_ports[c.key];
+            else if (c.type === 'add') data.external_ports[c.key] = c.content || {};
+        }
+    });
+    return JSON.stringify(data, null, 2);
+};
+
+const getOriginalFromBaseline = (baselineJson: string, c: any): any => {
+    try {
+        const data = JSON.parse(baselineJson);
+        if (c.to === 'ckt_netlist') return (data.ckt_netlist || []).find((item: any) => item.id === c.key);
+        if (c.to === 'connection') return data.connection?.[c.key];
+        if (c.to === 'external_ports') return data.external_ports?.[c.key];
+    } catch {}
+    return null;
+};
+
+
+const autoDiffNetlists = (baselineJson: string, newJson: string): any[] | null => {
+    try {
+        const base = JSON.parse(baselineJson);
+        const next = JSON.parse(newJson);
+        if (!next.ckt_netlist && !next.connection && !next.external_ports) return null;
+        const corrections: any[] = [];
+
+        // Diff ckt_netlist
+        const baseItems = base.ckt_netlist || [];
+        const nextItems = next.ckt_netlist || [];
+        const baseMap = new Map(baseItems.map((item: any) => [item.id, item]));
+        const nextMap = new Map(nextItems.map((item: any) => [item.id, item]));
+
+        for (const [id, bItem] of baseMap) {
+            const nItem = nextMap.get(id);
+            if (!nItem) {
+                corrections.push({ to: 'ckt_netlist', key: id, type: 'del', reason: '已删除' });
+            } else if (JSON.stringify(bItem) !== JSON.stringify(nItem)) {
+                const content: any = {};
+                for (const k of Object.keys(nItem as any)) {
+                    if (k === 'id') continue;
+                    if (JSON.stringify((bItem as any)[k]) !== JSON.stringify((nItem as any)[k])) {
+                        content[k] = (nItem as any)[k];
+                    }
+                }
+                if (Object.keys(content).length > 0)
+                    corrections.push({ to: 'ckt_netlist', key: id as string, type: 'modify', reason: '已修改', content });
+            }
+        }
+        for (const [id, nItem] of nextMap) {
+            if (!baseMap.has(id)) {
+                const { id: _omit, ...rest } = nItem as any;
+                corrections.push({ to: 'ckt_netlist', key: id as string, type: 'add', reason: '新增', content: rest });
+            }
+        }
+
+        // Diff external_ports
+        const basePorts = base.external_ports || {};
+        const nextPorts = next.external_ports || {};
+        for (const key of Object.keys(basePorts)) {
+            if (!nextPorts[key]) {
+                corrections.push({ to: 'external_ports', key, type: 'del', reason: '已删除' });
+            } else if (JSON.stringify(basePorts[key]) !== JSON.stringify(nextPorts[key])) {
+                const content: any = {};
+                for (const k of Object.keys(nextPorts[key])) {
+                    if (JSON.stringify(basePorts[key]?.[k]) !== JSON.stringify(nextPorts[key][k]))
+                        content[k] = nextPorts[key][k];
+                }
+                if (Object.keys(content).length > 0)
+                    corrections.push({ to: 'external_ports', key, type: 'modify', reason: '已修改', content });
+            }
+        }
+        for (const key of Object.keys(nextPorts)) {
+            if (!basePorts[key])
+                corrections.push({ to: 'external_ports', key, type: 'add', reason: '新增', content: nextPorts[key] });
+        }
+
+        // Diff connection - only compare ports (skip pixel-only changes)
+        const baseConns = base.connection || {};
+        const nextConns = next.connection || {};
+        for (const key of Object.keys(baseConns)) {
+            if (!nextConns[key]) {
+                corrections.push({ to: 'connection', key, type: 'del', reason: '连接删除' });
+            } else {
+                const bp = JSON.stringify(baseConns[key]?.ports);
+                const np = JSON.stringify(nextConns[key]?.ports);
+                if (bp !== np)
+                    corrections.push({ to: 'connection', key, type: 'modify', reason: '端口引用变更', content: { ports: nextConns[key].ports } });
+            }
+        }
+        for (const key of Object.keys(nextConns)) {
+            if (!baseConns[key])
+                corrections.push({ to: 'connection', key, type: 'add', reason: '新增', content: nextConns[key] });
+        }
+
+        return corrections.length > 0 ? corrections : null;
+    } catch { return null; }
+};
 
 // Color Generation
     const stringToColor = (str: any) => {
@@ -1073,6 +1243,444 @@ const RightSidebar = ({
     );
 };
 
+const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll }: {
+    items: any[], baseline: string, checked: boolean[], onToggle: (i: number) => void, onToggleAll?: (val: boolean) => void
+}) => {
+    const typeStyle: any = {
+        modify: 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400',
+        del: 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400',
+        add: 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
+    };
+    const typeLabel: any = { modify: '修改', del: '删除', add: '新增' };
+    const sectionIcon: any = { ckt_netlist: '📦', connection: '🔗', external_ports: '📍' };
+
+    const getDiffs = (c: any) => {
+        if (c.type === 'del') return [{ field: '整项', old: '存在', val: '删除' }];
+        if (c.type === 'add') {
+            if (!c.content) return [{ field: '整项', old: '-', val: '新增' }];
+            return Object.keys(c.content).slice(0, 3).map(k => ({
+                field: k, old: '-', val: typeof c.content[k] === 'object' ? JSON.stringify(c.content[k]).slice(0, 30) : String(c.content[k])
+            }));
+        }
+        const orig = getOriginalFromBaseline(baseline, c);
+        if (!orig || !c.content) return [];
+        const diffs: any[] = [];
+        const walk = (obj: any, ref: any, prefix: string) => {
+            for (const k of Object.keys(obj)) {
+                const path = prefix ? `${prefix}.${k}` : k;
+                if (obj[k] && typeof obj[k] === 'object' && !Array.isArray(obj[k]) && ref?.[k] && typeof ref[k] === 'object' && !Array.isArray(ref[k])) {
+                    walk(obj[k], ref[k], path);
+                } else {
+                    const ov = ref?.[k], nv = obj[k];
+                    if (JSON.stringify(ov) !== JSON.stringify(nv))
+                        diffs.push({ field: path, old: ov === undefined ? '-' : typeof ov === 'object' ? JSON.stringify(ov).slice(0, 25) : String(ov), val: typeof nv === 'object' ? JSON.stringify(nv).slice(0, 25) : String(nv) });
+                }
+            }
+        };
+        walk(c.content, orig, '');
+        return diffs;
+    };
+
+    const checkedCount = checked.filter(Boolean).length;
+
+    return (
+        <div className="my-2 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div className="px-3 py-2 bg-gradient-to-r from-violet-50 to-blue-50 dark:from-violet-900/20 dark:to-blue-900/20 flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">📋 校对结果 · {items.length} 项</span>
+                <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-violet-500">{checkedCount}/{items.length} 已应用</span>
+                    {onToggleAll && (
+                        <button onClick={() => onToggleAll(checkedCount < items.length)}
+                            className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-800/40 text-violet-600 dark:text-violet-300 hover:bg-violet-200 dark:hover:bg-violet-700/50 transition-colors font-medium">
+                            {checkedCount < items.length ? '✅ 全选' : '↩ 取消'}
+                        </button>
+                    )}
+                </div>
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-[360px] overflow-y-auto custom-scrollbar">
+                {items.map((c: any, i: number) => {
+                    const diffs = getDiffs(c);
+                    return (
+                        <div key={i} className={`px-3 py-2 text-[11px] transition-all cursor-pointer select-none ${checked[i] ? 'bg-green-50/60 dark:bg-green-900/10' : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'}`}
+                            onClick={() => onToggle(i)}>
+                            <div className="flex items-center gap-2">
+                                <div className={`w-[18px] h-[18px] rounded border-2 flex items-center justify-center transition-all shrink-0 ${checked[i] ? 'bg-green-500 border-green-500 text-white shadow-sm shadow-green-500/30' : 'border-slate-300 dark:border-slate-600'}`}>
+                                    {checked[i] && <Check size={11} strokeWidth={3}/>}
+                                </div>
+                                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold leading-none ${typeStyle[c.type] || 'bg-slate-100 text-slate-500'}`}>{typeLabel[c.type] || c.type}</span>
+                                <span className="text-[10px]">{sectionIcon[c.to] || '📄'}</span>
+                                <code className="text-violet-600 dark:text-violet-400 font-mono text-[10px] bg-violet-50 dark:bg-violet-900/20 px-1 rounded">{c.key}</code>
+                                {c.reason && <span className="text-slate-400 dark:text-slate-500 truncate ml-auto text-[10px] max-w-[110px] italic" title={c.reason}>{c.reason}</span>}
+                            </div>
+                            {diffs.length > 0 && (
+                                <div className="mt-1.5 ml-[26px] space-y-0.5">
+                                    {diffs.slice(0, 4).map((d, j) => (
+                                        <div key={j} className="flex items-center gap-1.5 text-[10px] font-mono leading-tight">
+                                            <span className="text-slate-400 dark:text-slate-500 min-w-[60px] truncate" title={d.field}>{d.field}</span>
+                                            {d.old !== '-' && <span className="text-red-400/80 line-through truncate max-w-[80px]" title={String(d.old)}>{d.old}</span>}
+                                            <span className="text-slate-300 dark:text-slate-600">→</span>
+                                            <span className="text-green-600 dark:text-green-400 truncate max-w-[80px]" title={String(d.val)}>{d.val}</span>
+                                        </div>
+                                    ))}
+                                    {diffs.length > 4 && <div className="text-slate-400 text-[9px]">+{diffs.length - 4} 更多字段...</div>}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist, bgImage, notify }: any) => {
+    const [settings, setSettings] = useState(() => {
+        try { const s = localStorage.getItem('llm_settings'); if (s) { const p = JSON.parse(s); if (p?.host) return p; } } catch {}
+        return { host: 'https://api.openai.com', apiKey: '', model: 'gpt-4o', systemPrompt: DEFAULT_LLM_SYSTEM_PROMPT };
+    });
+    const [msgs, setMsgs] = useState<any[]>([]);
+    const [input, setInput] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [cfgOpen, setCfgOpen] = useState(false);
+    const endRef = useRef<HTMLDivElement>(null);
+    const abortRef = useRef<AbortController | null>(null);
+    const lastNetlistRef = useRef<string>('{}');
+
+    useEffect(() => { localStorage.setItem('llm_settings', JSON.stringify(settings)); }, [settings]);
+    useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs]);
+
+    const getNetlist = () => { try { return reactStateToPythonData(nodes, edges, extraData); } catch { return '{}'; } };
+
+    const extractAndApplyAll = (text: string, startFrom: number = 0): number => {
+        const matches = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
+        let applied = startFrom;
+        for (let i = startFrom; i < matches.length; i++) {
+            try { 
+                const block = matches[i][1].trim();
+                if (block.startsWith('{') || block.startsWith('[')) {
+                    JSON.parse(block); 
+                    onApplyNetlist(block); 
+                    applied = i + 1; 
+                }
+            } catch {}
+        }
+        return applied;
+    };
+
+    const handleCorrectionToggle = (msgIdx: number, corrIdx: number) => {
+        const msg = msgs[msgIdx];
+        if (!msg.corrections || !msg.baseline) return;
+        const newChecked = [...(msg.correctionChecked || [])];
+        newChecked[corrIdx] = !newChecked[corrIdx];
+        const firstApply = !msg.correctionHistorySaved && newChecked.some(Boolean);
+        setMsgs(prev => {
+            const c = [...prev];
+            c[msgIdx] = { ...c[msgIdx], correctionChecked: newChecked, correctionHistorySaved: firstApply || c[msgIdx].correctionHistorySaved };
+            return c;
+        });
+        const result = applyCorrectionItems(msg.baseline, msg.corrections, newChecked);
+        onApplyNetlist(result, !firstApply);
+    };
+
+    const handleCorrectionToggleAll = (msgIdx: number, val: boolean) => {
+        const msg = msgs[msgIdx];
+        if (!msg.corrections || !msg.baseline) return;
+        const newChecked = new Array(msg.corrections.length).fill(val);
+        const firstApply = !msg.correctionHistorySaved && val;
+        setMsgs(prev => {
+            const c = [...prev];
+            c[msgIdx] = { ...c[msgIdx], correctionChecked: newChecked, correctionHistorySaved: firstApply || c[msgIdx].correctionHistorySaved };
+            return c;
+        });
+        const result = applyCorrectionItems(msg.baseline, msg.corrections, newChecked);
+        onApplyNetlist(result, !firstApply);
+    };
+
+    const send = async () => {
+        if (!input.trim() || loading) return;
+        if (!settings.apiKey) { notify?.('请先配置 API Key'); setCfgOpen(true); return; }
+
+        const hasNetlist = input.includes('@网表');
+        const hasImage = input.includes('@原图');
+        const userMsg = { role: 'user', content: input, ts: Date.now(), hasNetlist, hasImage };
+        const newMsgs = [...msgs, userMsg];
+        setMsgs(newMsgs);
+        setInput('');
+        setLoading(true);
+
+        let sysContent = settings.systemPrompt;
+        if (hasNetlist) {
+            const netlist = getNetlist();
+            lastNetlistRef.current = netlist;
+            sysContent += '\n\n当前网表:\n```json\n' + netlist + '\n```';
+        }
+        const apiMsgs: any[] = [{ role: 'system', content: sysContent }];
+
+        newMsgs.forEach((m: any) => {
+            if (m.role === 'user') {
+                const cleanText = m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim() || m.content;
+                if (m.hasImage && bgImage?.startsWith('data:')) {
+                    apiMsgs.push({ role: 'user', content: [
+                        { type: 'image_url', image_url: { url: bgImage } },
+                        { type: 'text', text: cleanText }
+                    ]});
+                } else {
+                    apiMsgs.push({ role: 'user', content: cleanText });
+                }
+            } else if (m.role === 'assistant') {
+                apiMsgs.push({ role: 'assistant', content: m.content });
+            }
+        });
+
+        try {
+            abortRef.current = new AbortController();
+            const host = settings.host.replace(/\/+$/, '');
+            const endpoint = host.match(/\/v\d+\/?$/) ? `${host}/chat/completions` : `${host}/v1/chat/completions`;
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.apiKey}` },
+                body: JSON.stringify({ model: settings.model, messages: apiMsgs, stream: true }),
+                signal: abortRef.current.signal
+            });
+            if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+
+            // Helper: try extract corrections or auto-diff from full response
+            const resolveCorrections = (content: string): any[] | null => {
+                if (!hasNetlist) return null;
+                
+                // Try to find any code block
+                const matches = [...content.matchAll(/```(?:json|corrections)?\s*([\s\S]*?)```/g)];
+                for (const m of matches) {
+                    const block = m[1].trim();
+                    try {
+                        const parsed = JSON.parse(block);
+                        // 1. Direct Corrections Array
+                        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].to && parsed[0].type) {
+                            return parsed;
+                        }
+                        // 2. Full Netlist Auto-Diff
+                        const diff = autoDiffNetlists(lastNetlistRef.current, block);
+                        if (diff) return diff;
+                    } catch {}
+                }
+                return null;
+            };
+
+            if (!res.headers.get('content-type')?.includes('text/event-stream')) {
+                const data = await res.json();
+                const content = data.choices?.[0]?.message?.content || '';
+                const corrs = resolveCorrections(content);
+                if (corrs) {
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false) }]);
+                } else {
+                    const applied = !hasNetlist && extractAndApplyAll(content, 0) > 0;
+                    setMsgs(prev => [...prev, { role: 'assistant', content, ts: Date.now(), applied }]);
+                }
+                return;
+            }
+
+            const reader = res.body!.getReader();
+            const decoder = new TextDecoder();
+            let full = '';
+            let appliedBlocks = 0;
+            setMsgs(prev => [...prev, { role: 'assistant', content: '', ts: Date.now() }]);
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                for (const line of decoder.decode(value).split('\n')) {
+                    if (!line.startsWith('data: ') || line.includes('[DONE]')) continue;
+                    try {
+                        const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || '';
+                        full += delta;
+                        setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], content: full }; return c; });
+                    } catch {}
+                }
+                // Only auto-apply JSON during streaming if NOT in netlist mode
+                if (!hasNetlist) {
+                    const newApplied = extractAndApplyAll(full, appliedBlocks);
+                    if (newApplied > appliedBlocks) {
+                        appliedBlocks = newApplied;
+                        setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
+                    }
+                }
+            }
+
+            // After streaming: resolve corrections or auto-diff
+            const corrs = resolveCorrections(full);
+            if (corrs) {
+                setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], corrections: corrs, baseline: lastNetlistRef.current, correctionChecked: new Array(corrs.length).fill(false) }; return c; });
+            } else if (!hasNetlist) {
+                const finalApplied = extractAndApplyAll(full, appliedBlocks);
+                if (finalApplied > appliedBlocks) {
+                    setMsgs(prev => { const c = [...prev]; c[c.length - 1] = { ...c[c.length - 1], applied: true }; return c; });
+                }
+            }
+        } catch (e: any) {
+            if (e.name !== 'AbortError') setMsgs(prev => [...prev, { role: 'error', content: e.message, ts: Date.now() }]);
+        } finally {
+            setLoading(false);
+            abortRef.current = null;
+        }
+    };
+
+    const renderContent = (text: string, msgData?: any, msgIdx?: number) => {
+        if (!text) return null;
+        return text.split(/(```[\s\S]*?```)/g).map((part, i) => {
+            if (part.startsWith('```')) {
+                const lang = part.match(/```(\w*)/)?.[1] || '';
+                if ((!lang || lang === 'corrections' || lang === 'json') && msgData?.corrections && msgIdx !== undefined) {
+                    return <NetlistDiffTable key={i} items={msgData.corrections} baseline={msgData.baseline || '{}'}
+                        checked={msgData.correctionChecked || []} onToggle={(ci: number) => handleCorrectionToggle(msgIdx, ci)}
+                        onToggleAll={(val: boolean) => handleCorrectionToggleAll(msgIdx, val)}/>;
+                }
+                const code = part.replace(/```\w*\n?/, '').replace(/\n?```$/, '');
+                return (
+                    <div key={i} className="my-2 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+                        <div className="flex justify-between items-center px-3 py-1 bg-slate-100 dark:bg-slate-800 text-[10px] text-slate-500 dark:text-slate-400">
+                            <span>{lang || 'code'}</span>
+                            {msgData?.applied && lang === 'json' && <span className="text-green-500 flex items-center gap-1"><CheckCircle2 size={10}/> 已应用</span>}
+                        </div>
+                        <pre className="p-3 bg-slate-50 dark:bg-slate-900 text-[11px] text-slate-700 dark:text-slate-300 overflow-x-auto max-h-48"><code>{code}</code></pre>
+                    </div>
+                );
+            }
+            return part ? <p key={i} className="whitespace-pre-wrap leading-relaxed">{part}</p> : null;
+        });
+    };
+
+    return (
+        <div className={`w-[420px] bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 flex flex-col shrink-0 z-20 shadow-2xl transition-colors ${!isOpen ? 'hidden' : ''}`}>
+            {/* Header */}
+            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-violet-500/5 to-blue-500/5 dark:from-violet-500/10 dark:to-blue-500/10 shrink-0">
+                <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-blue-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
+                        <Sparkles size={16} className="text-white"/>
+                    </div>
+                    <div>
+                        <h3 className="text-sm font-bold text-slate-800 dark:text-white leading-tight">AI 助手</h3>
+                        <p className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">{settings.model}</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-0.5">
+                    <button onClick={() => setCfgOpen(!cfgOpen)} className={`p-1.5 rounded-lg transition-colors ${cfgOpen ? 'bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400' : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400'}`}><Settings size={15}/></button>
+                    <button onClick={() => setMsgs([])} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 transition-colors" title="清空"><Trash2 size={15}/></button>
+                    <button onClick={onClose} className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 transition-colors"><PanelRightClose size={15}/></button>
+                </div>
+            </div>
+
+            {/* Settings */}
+            {cfgOpen && (
+                <div className="border-b border-slate-200 dark:border-slate-800 p-3 space-y-2.5 bg-slate-50/80 dark:bg-slate-950/50">
+                    {[
+                        { k: 'host', l: 'API Host', p: 'https://api.openai.com', t: 'text' },
+                        { k: 'apiKey', l: 'API Key', p: 'sk-...', t: 'password' },
+                        { k: 'model', l: 'Model', p: 'gpt-4o', t: 'text' },
+                    ].map((f: any) => (
+                        <div key={f.k}>
+                            <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">{f.l}</label>
+                            <input type={f.t} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 mt-0.5 transition-all" placeholder={f.p} value={(settings as any)[f.k]} onChange={e => setSettings((s: any) => ({ ...s, [f.k]: e.target.value }))}/>
+                        </div>
+                    ))}
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase">System Prompt</label>
+                        <textarea className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-violet-500 mt-0.5 h-20 resize-none transition-all" value={settings.systemPrompt} onChange={e => setSettings((s: any) => ({ ...s, systemPrompt: e.target.value }))}/>
+                    </div>
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 rounded px-2 py-1.5">
+                        💡 在消息中输入 <code className="text-violet-500 font-bold">@网表</code> 附带网表数据，<code className="text-violet-500 font-bold">@原图</code> 附带电路图片
+                    </div>
+                </div>
+            )}
+
+            {/* Presets */}
+            {msgs.length === 0 && !cfgOpen && (
+                <div className="p-3 border-b border-slate-200 dark:border-slate-800 shrink-0">
+                    <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase mb-2 tracking-wider">快捷指令</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                        {LLM_PRESETS.map(p => (
+                            <button key={p.label} onClick={() => setInput(p.prompt)}
+                                className="text-left px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700/50 hover:border-violet-300 dark:hover:border-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/10 transition-all text-[11px] text-slate-500 dark:text-slate-400 hover:text-violet-700 dark:hover:text-violet-300">
+                                <span className="mr-1">{p.icon}</span><span className="font-medium">{p.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar min-h-0">
+                {msgs.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-300 dark:text-slate-600 gap-3 select-none">
+                        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500/10 to-blue-500/10 flex items-center justify-center">
+                            <Bot size={32} className="text-violet-300 dark:text-violet-700"/>
+                        </div>
+                        <p className="text-xs font-medium">输入问题开始对话</p>
+                        <p className="text-[10px] text-slate-300 dark:text-slate-600">用 @网表 @原图 引用当前数据</p>
+                    </div>
+                )}
+                {msgs.map((m: any, i: number) => (
+                    <div key={i} className={`flex gap-2.5 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                        {m.role !== 'user' && (
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${m.role === 'error' ? 'bg-red-100 dark:bg-red-900/30' : 'bg-gradient-to-br from-violet-500 to-blue-500 shadow-sm'}`}>
+                                {m.role === 'error' ? <AlertTriangle size={13} className="text-red-500"/> : <Bot size={13} className="text-white"/>}
+                            </div>
+                        )}
+                        <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed ${
+                            m.role === 'user' ? 'bg-gradient-to-r from-violet-600 to-blue-600 text-white rounded-br-md shadow-sm'
+                            : m.role === 'error' ? 'bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/30 rounded-bl-md'
+                            : 'bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-200 rounded-bl-md'
+                        }`}>
+                            {m.role === 'user' ? (<>
+                                {m.hasNetlist && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">📋 网表</span>}
+                                {m.hasImage && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">🖼️ 原图</span>}
+                                {m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim()}
+                            </>) : (
+                                m.content ? renderContent(m.content, m, i) : (
+                                    <div className="flex gap-1.5 py-1">
+                                        <div className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce"/>
+                                        <div className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce [animation-delay:150ms]"/>
+                                        <div className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce [animation-delay:300ms]"/>
+                                    </div>
+                                )
+                            )}
+                            {m.applied && !m.corrections && <div className="mt-2 pt-2 border-t border-green-200/50 dark:border-green-800/30 flex items-center gap-1.5 text-green-600 dark:text-green-400 text-[11px] font-medium"><Zap size={12}/> 网表已自动更新</div>}
+                            {m.corrections && (m.correctionChecked || []).some(Boolean) && <div className="mt-2 pt-2 border-t border-violet-200/50 dark:border-violet-800/30 flex items-center gap-1.5 text-violet-600 dark:text-violet-400 text-[11px] font-medium"><Check size={12}/> {(m.correctionChecked || []).filter(Boolean).length}/{m.corrections.length} 项已应用</div>}
+                        </div>
+                    </div>
+                ))}
+                <div ref={endRef}/>
+            </div>
+
+            {/* Input */}
+            <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur shrink-0">
+                <div className="flex gap-1.5 mb-2">
+                    <button onClick={() => setInput(prev => prev.includes('@网表') ? prev : '@网表 ' + prev)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all ${input.includes('@网表') ? 'bg-violet-100 dark:bg-violet-900/30 border-violet-300 dark:border-violet-700 text-violet-600 dark:text-violet-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-violet-500 hover:border-violet-300'}`}>
+                        📋 @网表
+                    </button>
+                    <button onClick={() => setInput(prev => prev.includes('@原图') ? prev : '@原图 ' + prev)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all ${input.includes('@原图') ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-blue-500 hover:border-blue-300'}`}>
+                        🖼️ @原图
+                    </button>
+                </div>
+                <div className="flex gap-2 items-end">
+                    <textarea
+                        className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-800 dark:text-slate-200 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 resize-none placeholder-slate-400 dark:placeholder-slate-600 transition-all min-h-[80px]"
+                        rows={3} placeholder="输入问题... @网表 引用网表 @原图 引用电路图&#10;Enter 发送，Shift+Enter 换行" value={input}
+                        onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'; }}
+                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+                    />
+                    {loading ? (
+                        <button onClick={() => { abortRef.current?.abort(); setLoading(false); }} className="p-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl transition-colors shrink-0 shadow-sm"><X size={18}/></button>
+                    ) : (
+                        <button onClick={send} disabled={!input.trim()} className="p-2.5 bg-gradient-to-r from-violet-500 to-blue-500 hover:from-violet-600 hover:to-blue-600 text-white rounded-xl transition-all disabled:opacity-30 shrink-0 shadow-lg shadow-violet-500/20"><Send size={18}/></button>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const MODE = { VIEW: 'VIEW', ADD_COMP: 'ADD_COMP', ADD_PORT: 'ADD_PORT', CONNECT: 'CONNECT' };
 
 export default function App() {
@@ -1149,6 +1757,9 @@ export default function App() {
   // --- Integration State (Task Mode) ---
   const [taskId, setTaskId] = useState<string | null>(null);
   const [extraTaskData, setExtraTaskData] = useState<any>({}); // Store preserved fields
+
+  // --- LLM Panel State ---
+  const [llmPanelOpen, setLlmPanelOpen] = useState(false);
 
   // --- Heartbeat Logic ---
   useEffect(() => {
@@ -1772,6 +2383,19 @@ export default function App() {
     setPast(prev => [...prev.slice(-19), current]);
     setFuture([]); 
   }, [nodes, edges]);
+
+  const handleApplyLLMNetlist = (jsonStr: string, skipHistory = false) => {
+      const result = pythonDataToReactState(jsonStr);
+      if (result) {
+          if (!skipHistory) saveHistory();
+          setNodes(result.nodes);
+          setEdges(result.edges);
+          if (result.extraData) setExtraTaskData(result.extraData);
+          if (!skipHistory) setNotification("✨ AI 已自动更新网表");
+      } else {
+          if (!skipHistory) setNotification("AI 返回的网表格式无法解析");
+      }
+  };
 
   const undo = useCallback(() => {
     if (past.length === 0) return;
@@ -2431,6 +3055,16 @@ export default function App() {
                     <button onClick={redo} disabled={future.length===0} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white disabled:opacity-30 transition-colors"><Redo size={16}/></button>
                 </div>
                 
+                <button onClick={() => setLlmPanelOpen(!llmPanelOpen)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                        llmPanelOpen 
+                            ? 'bg-gradient-to-r from-violet-600 to-blue-600 text-white shadow-lg shadow-violet-500/20' 
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}>
+                    <Sparkles size={16}/>
+                    <span>AI</span>
+                </button>
+
                 <button onClick={() => setShowSettings(true)} className="flex items-center gap-2 px-3 py-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors text-sm font-medium">
                     <Settings size={16} />
                     <span>Settings</span>
@@ -2854,21 +3488,33 @@ export default function App() {
                 </div>
             </div>
 
-            {/* Right Sidebar */}
-            <RightSidebar 
+            {/* Right Panel: Tags or AI */}
+            {!llmPanelOpen && (
+                <RightSidebar 
+                    nodes={nodes}
+                    componentTypes={uniqueComponentTypes}
+                    portNames={uniquePortNames}
+                    onAddType={(t: string) => setExtraTypes(prev => [...prev, t])}
+                    onAddPort={(p: string) => setExtraPorts(prev => [...prev, p])}
+                    hiddenTypes={hiddenTypes}
+                    setHiddenTypes={setHiddenTypes}
+                    hiddenNodeIds={hiddenNodeIds}
+                    setHiddenNodeIds={setHiddenNodeIds}
+                    onSelectIds={(id: any) => {
+                        setSelectedIds(new Set([id]));
+                        setMode(MODE.VIEW);
+                    }}
+                />
+            )}
+            <LLMChatPanel
+                isOpen={llmPanelOpen}
+                onClose={() => setLlmPanelOpen(false)}
                 nodes={nodes}
-                componentTypes={uniqueComponentTypes}
-                portNames={uniquePortNames}
-                onAddType={(t: string) => setExtraTypes(prev => [...prev, t])}
-                onAddPort={(p: string) => setExtraPorts(prev => [...prev, p])}
-                hiddenTypes={hiddenTypes}
-                setHiddenTypes={setHiddenTypes}
-                hiddenNodeIds={hiddenNodeIds}
-                setHiddenNodeIds={setHiddenNodeIds}
-                onSelectIds={(id: any) => {
-                    setSelectedIds(new Set([id]));
-                    setMode(MODE.VIEW);
-                }}
+                edges={edges}
+                extraData={extraTaskData}
+                onApplyNetlist={handleApplyLLMNetlist}
+                bgImage={bgImage}
+                notify={setNotification}
             />
         </div>
     </div>

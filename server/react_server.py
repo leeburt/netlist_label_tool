@@ -26,9 +26,10 @@ app.add_middleware(
 
 # Paths
 current_dir = Path(__file__).resolve().parent
-project_root = current_dir.parent.parent.parent
-# Assuming dist is in netlist_label_tool/dist
-dist_dir = project_root / "netlist_label_tool" / "dist"
+# Repo root: .../netlist_label_tool
+project_root = current_dir.parent
+# Frontend build output: .../netlist_label_tool/dist
+dist_dir = project_root / "dist"
 cache_dir = project_root / ".cache"
 tasks_dir = cache_dir / "tasks" 
 tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -255,13 +256,27 @@ if __name__ == "__main__":
     import uvicorn
     # Using 12301
     
+    use_https = os.getenv("NETLIST_LABEL_TOOL_HTTPS", "").strip().lower() in {"1", "true", "yes", "y"}
+
     # Check for SSL certificates
-    key_file = "key.pem"
-    cert_file = "cert.pem"
-    
-    if os.path.exists(key_file) and os.path.exists(cert_file):
-        print("Starting in HTTPS mode...")
-        uvicorn.run(app, host="0.0.0.0", port=12301, ssl_keyfile=key_file, ssl_certfile=cert_file)
+    key_file = current_dir / "key.pem"
+    cert_file = current_dir / "cert.pem"
+    has_certs = key_file.exists() and cert_file.exists()
+
+    if use_https and has_certs:
+        print("Starting in HTTPS mode... (NETLIST_LABEL_TOOL_HTTPS=1)")
+        print("Open in browser: https://127.0.0.1:12301  (do not use 0.0.0.0)")
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=12301,
+            ssl_keyfile=str(key_file),
+            ssl_certfile=str(cert_file),
+        )
     else:
-        print("Starting in HTTP mode...")
+        if use_https and not has_certs:
+            print("Starting in HTTP mode... (HTTPS requested but cert.pem/key.pem not found)")
+        else:
+            print("Starting in HTTP mode...")
+        print("Open in browser: http://127.0.0.1:12301  (do not use 0.0.0.0)")
         uvicorn.run(app, host="0.0.0.0", port=12301)

@@ -51,6 +51,10 @@ const DEFAULT_LLM_MODELS = [
 - type: modify(部分更新,只需包含要改的字段) / del(删除) / add(新增,需完整内容)
 - reason: 简要说明修改原因
 - content: 修改/新增的内容(del类型可省略)
+- 重命名connection的key(网络名): type="modify"，content中用 "rename_to":"新名称"
+  例: {"to":"connection","key":"V\\tune","type":"modify","reason":"修正网络名","content":{"rename_to":"Vtune"}}
+  例: {"to":"connection","key":"net3","type":"modify","reason":"命名网络","content":{"rename_to":"RF_out"}}
+- 重命名external_ports的key: 同理用 "rename_to"
 
 每一条修改都是独立的一个对象。即使需要修改很多项，也要逐个列出。
 **不要返回完整的网表JSON，只返回需要修改的项。**
@@ -94,51 +98,65 @@ const applyCorrectionItems = (baselineJson: string, items: any[], checked: boole
             data.connection = data.connection || {};
             if (c.type === 'modify' && data.connection[c.key]) {
                 const merged = deepMergeObj(data.connection[c.key], c.content || {});
-                // Handle rename if LLM puts 'key' in content
-                if (merged.key && merged.key !== c.key) {
-                    const newKey = merged.key;
+                // Handle rename via 'key', 'rename_to', or 'name' (connection has no native 'name' field)
+                const newKey = merged.key || merged.rename_to || merged.name;
+                if (newKey && newKey !== c.key) {
                     delete merged.key;
+                    delete merged.rename_to;
+                    delete merged.name;
                     delete data.connection[c.key];
                     data.connection[newKey] = merged;
                 } else {
+                    delete merged.rename_to;
+                    delete merged.name;
                     data.connection[c.key] = merged;
                 }
             }
             else if (c.type === 'del') delete data.connection[c.key];
             else if (c.type === 'add') {
                 const content = c.content || {};
-                if (content.key && content.key !== c.key) {
-                    const newKey = content.key;
+                const addKey = content.key || content.rename_to || content.name;
+                if (addKey && addKey !== c.key) {
                     const newContent = { ...content };
                     delete newContent.key;
-                    data.connection[newKey] = newContent;
+                    delete newContent.rename_to;
+                    delete newContent.name;
+                    data.connection[addKey] = newContent;
                 } else {
-                    data.connection[c.key] = content;
+                    const newContent = { ...content };
+                    delete newContent.rename_to;
+                    delete newContent.name;
+                    data.connection[c.key] = newContent;
                 }
             }
         } else if (c.to === 'external_ports') {
             data.external_ports = data.external_ports || {};
             if (c.type === 'modify' && data.external_ports[c.key]) {
                 const merged = deepMergeObj(data.external_ports[c.key], c.content || {});
-                if (merged.key && merged.key !== c.key) {
-                    const newKey = merged.key;
+                const newKey = merged.key || merged.rename_to;
+                if (newKey && newKey !== c.key) {
                     delete merged.key;
+                    delete merged.rename_to;
                     delete data.external_ports[c.key];
                     data.external_ports[newKey] = merged;
                 } else {
+                    delete merged.rename_to;
                     data.external_ports[c.key] = merged;
                 }
             }
             else if (c.type === 'del') delete data.external_ports[c.key];
             else if (c.type === 'add') {
                 const content = c.content || {};
-                if (content.key && content.key !== c.key) {
-                    const newKey = content.key;
+                const addKey = content.key || content.rename_to;
+                if (addKey && addKey !== c.key) {
                     const newContent = { ...content };
                     delete newContent.key;
-                    data.external_ports[newKey] = newContent;
+                    delete newContent.rename_to;
+                    data.external_ports[addKey] = newContent;
                 } else {
-                    data.external_ports[c.key] = content;
+                    const newContent = { ...content };
+                    delete newContent.rename_to;
+                    data.external_ports[c.key] = newContent;
                 }
             }
         }
@@ -193,12 +211,14 @@ const autoDiffNetlists = (baselineJson: string, newJson: string): any[] | null =
             }
         }
 
-        // Diff external_ports
+        // Diff external_ports - detect renames
         const basePorts = base.external_ports || {};
         const nextPorts = next.external_ports || {};
+        const deletedPorts: string[] = [];
+        const addedPorts: string[] = [];
         for (const key of Object.keys(basePorts)) {
             if (!nextPorts[key]) {
-                corrections.push({ to: 'external_ports', key, type: 'del', reason: '已删除' });
+                deletedPorts.push(key);
             } else if (JSON.stringify(basePorts[key]) !== JSON.stringify(nextPorts[key])) {
                 const content: any = {};
                 for (const k of Object.keys(nextPorts[key])) {
@@ -210,16 +230,36 @@ const autoDiffNetlists = (baselineJson: string, newJson: string): any[] | null =
             }
         }
         for (const key of Object.keys(nextPorts)) {
-            if (!basePorts[key])
-                corrections.push({ to: 'external_ports', key, type: 'add', reason: '新增', content: nextPorts[key] });
+            if (!basePorts[key]) addedPorts.push(key);
+        }
+        // Match deleted+added pairs as renames (by name similarity)
+        for (const delKey of deletedPorts) {
+            const delName = JSON.stringify(basePorts[delKey]?.name);
+            let matched = false;
+            for (let ai = 0; ai < addedPorts.length; ai++) {
+                const addKey = addedPorts[ai];
+                const addName = JSON.stringify(nextPorts[addKey]?.name);
+                if (delName === addName) {
+                    corrections.push({ to: 'external_ports', key: delKey, type: 'modify', reason: '端口重命名', content: { rename_to: addKey } });
+                    addedPorts.splice(ai, 1);
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) corrections.push({ to: 'external_ports', key: delKey, type: 'del', reason: '已删除' });
+        }
+        for (const key of addedPorts) {
+            corrections.push({ to: 'external_ports', key, type: 'add', reason: '新增', content: nextPorts[key] });
         }
 
-        // Diff connection - only compare ports (skip pixel-only changes)
+        // Diff connection - detect renames by port matching, skip pixel-only changes
         const baseConns = base.connection || {};
         const nextConns = next.connection || {};
+        const deletedConns: string[] = [];
+        const addedConns: string[] = [];
         for (const key of Object.keys(baseConns)) {
             if (!nextConns[key]) {
-                corrections.push({ to: 'connection', key, type: 'del', reason: '连接删除' });
+                deletedConns.push(key);
             } else {
                 const bp = JSON.stringify(baseConns[key]?.ports);
                 const np = JSON.stringify(nextConns[key]?.ports);
@@ -228,8 +268,26 @@ const autoDiffNetlists = (baselineJson: string, newJson: string): any[] | null =
             }
         }
         for (const key of Object.keys(nextConns)) {
-            if (!baseConns[key])
-                corrections.push({ to: 'connection', key, type: 'add', reason: '新增', content: nextConns[key] });
+            if (!baseConns[key]) addedConns.push(key);
+        }
+        // Match deleted+added pairs as renames (by port similarity)
+        for (const delKey of deletedConns) {
+            const delPorts = JSON.stringify(baseConns[delKey]?.ports);
+            let matched = false;
+            for (let ai = 0; ai < addedConns.length; ai++) {
+                const addKey = addedConns[ai];
+                const addPorts = JSON.stringify(nextConns[addKey]?.ports);
+                if (delPorts === addPorts) {
+                    corrections.push({ to: 'connection', key: delKey, type: 'modify', reason: '网络重命名', content: { rename_to: addKey } });
+                    addedConns.splice(ai, 1);
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) corrections.push({ to: 'connection', key: delKey, type: 'del', reason: '连接删除' });
+        }
+        for (const key of addedConns) {
+            corrections.push({ to: 'connection', key, type: 'add', reason: '新增', content: nextConns[key] });
         }
 
         return corrections.length > 0 ? corrections : null;
@@ -1314,6 +1372,13 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll, onI
                 field: k, old: '-', val: typeof c.content[k] === 'object' ? JSON.stringify(c.content[k]).slice(0, 30) : String(c.content[k])
             }));
         }
+        // For connection renames: show rename_to/name/key as "重命名" directly
+        if (c.type === 'modify' && c.to === 'connection' && c.content) {
+            const renameVal = c.content.rename_to || c.content.name || c.content.key;
+            if (renameVal && renameVal !== c.key) {
+                return [{ field: 'rename_to', old: c.key, val: renameVal }];
+            }
+        }
         const orig = getOriginalFromBaseline(baseline, c);
         if (!orig || !c.content) return [];
         const diffs: any[] = [];
@@ -1357,7 +1422,9 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll, onI
                     const firstDiff = diffs[0];
                     // 智能摘要：优先展示第一条差异，如果没差异显示原因
                     const summaryText = firstDiff 
-                        ? (firstDiff.field === '整项' ? firstDiff.val : `${firstDiff.field}: ${firstDiff.old} → ${firstDiff.val}`)
+                        ? (firstDiff.field === '整项' ? firstDiff.val 
+                          : firstDiff.field === 'rename_to' ? `→ ${firstDiff.val}`
+                          : `${firstDiff.field}: ${firstDiff.old} → ${firstDiff.val}`)
                         : (c.reason || c.type);
                     
                     return (

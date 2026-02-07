@@ -25,21 +25,42 @@ export const mergeConnectionData = (existing: any, incoming: any) => {
 export const applyCorrectionItems = (baselineJson: string, items: any[], checked: boolean[]): string => {
     const data = JSON.parse(baselineJson);
     const connRenames = new Map<string, string>(); // oldKey -> newKey
+    const extRenames = new Map<string, string>(); // oldKey -> newKey (for external_ports)
 
-    // Helper to find key robustly
+    // Helper to find key robustly (case-insensitive, ignore # prefix)
     const findKey = (obj: any, key: string) => {
         if (!obj) return null;
         if (obj[key]) return key;
+        
         const normalized = key.trim().toLowerCase();
-        return Object.keys(obj).find(k => k.trim().toLowerCase() === normalized) || null;
+        // Prepare variations: with #, without #
+        const normalizedHash = normalized.startsWith('#') ? normalized : '#' + normalized;
+        const normalizedNoHash = normalized.startsWith('#') ? normalized.substring(1) : normalized;
+        
+        return Object.keys(obj).find(k => {
+            const kn = k.trim().toLowerCase();
+            return kn === normalized || kn === normalizedHash || kn === normalizedNoHash;
+        }) || null;
+    };
+
+    // Helper to compare IDs robustly (ignore # prefix)
+    const isIdMatch = (id1: string, id2: string) => {
+        if (id1 === id2) return true;
+        const n1 = id1.trim();
+        const n2 = id2.trim();
+        if (n1 === n2) return true;
+        const n1NoHash = n1.startsWith('#') ? n1.substring(1) : n1;
+        const n2NoHash = n2.startsWith('#') ? n2.substring(1) : n2;
+        return n1NoHash === n2NoHash;
     };
 
     items.forEach((c, i) => {
         if (!checked[i]) return;
         if (c.to === 'ckt_netlist') {
             if (c.type === 'modify') {
-                // ckt_netlist is array, find by id
-                const idx = (data.ckt_netlist || []).findIndex((item: any) => item.id === c.key || item.id === c.key.trim());
+                // ckt_netlist is array, find by id using robust match
+                const idx = (data.ckt_netlist || []).findIndex((item: any) => isIdMatch(item.id, c.key));
+                
                 if (idx >= 0) {
                     const comp = data.ckt_netlist[idx];
                     // Sync port_connection changes to connection map to ensure graph consistency
@@ -70,7 +91,7 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                     data.ckt_netlist[idx] = deepMergeObj(data.ckt_netlist[idx], c.content || {});
                 }
             } else if (c.type === 'del') {
-                data.ckt_netlist = (data.ckt_netlist || []).filter((item: any) => item.id !== c.key);
+                data.ckt_netlist = (data.ckt_netlist || []).filter((item: any) => !isIdMatch(item.id, c.key));
             } else if (c.type === 'add') {
                 (data.ckt_netlist = data.ckt_netlist || []).push({ id: c.key, ...c.content });
             }
@@ -80,13 +101,16 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
             
             if (c.type === 'modify' && realKey) {
                 const merged = deepMergeObj(data.connection[realKey], c.content || {});
-                const newKey = merged.key || merged.rename_to || merged.name;
+                // Check multiple possible rename fields
+                const newKey = merged.key || merged.rename_to || merged.name || merged.new_name || merged.new_key;
                 
                 if (newKey && newKey !== realKey) {
                     // Clean up special properties from the merged object
                     delete merged.key;
                     delete merged.rename_to;
                     delete merged.name;
+                    delete merged.new_name;
+                    delete merged.new_key;
                     
                     // Remove old key
                     delete data.connection[realKey];
@@ -103,13 +127,15 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                 } else {
                     delete merged.rename_to;
                     delete merged.name;
+                    delete merged.new_name;
+                    delete merged.new_key;
                     data.connection[realKey] = merged;
                 }
             }
             else if (c.type === 'del' && realKey) delete data.connection[realKey];
             else if (c.type === 'add') {
                 const content = c.content || {};
-                const addKey = content.key || content.rename_to || content.name;
+                const addKey = content.key || content.rename_to || content.name || content.new_name || content.new_key;
                 const targetKey = addKey || c.key;
                 
                 // If renaming during add (rare but possible in some diffs)
@@ -117,6 +143,8 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                 delete newContent.key;
                 delete newContent.rename_to;
                 delete newContent.name;
+                delete newContent.new_name;
+                delete newContent.new_key;
 
                 if (data.connection[targetKey]) {
                     data.connection[targetKey] = mergeConnectionData(data.connection[targetKey], newContent);
@@ -130,10 +158,15 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
 
             if (c.type === 'modify' && realKey) {
                 const merged = deepMergeObj(data.external_ports[realKey], c.content || {});
-                const newKey = merged.key || merged.rename_to;
+                const newKey = merged.key || merged.rename_to || merged.new_key;
+                
                 if (newKey && newKey !== realKey) {
                     delete merged.key;
                     delete merged.rename_to;
+                    // delete merged.name; // Keep name property for external_ports
+                    delete merged.new_name;
+                    delete merged.new_key;
+                    
                     delete data.external_ports[realKey];
                     
                     if (data.external_ports[newKey]) {
@@ -141,20 +174,30 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                     } else {
                          data.external_ports[newKey] = merged;
                     }
+                    extRenames.set(realKey, newKey);
                 } else {
                     delete merged.rename_to;
+                    // delete merged.name; // Keep name property for external_ports
+                    delete merged.new_name;
+                    delete merged.new_key;
                     data.external_ports[realKey] = merged;
                 }
             }
             else if (c.type === 'del' && realKey) delete data.external_ports[realKey];
             else if (c.type === 'add') {
                 const content = c.content || {};
-                const addKey = content.key || content.rename_to;
-                const targetKey = addKey || c.key;
+                // External Ports: Key is ID. Name is a property.
+                // Do NOT use content.name as key.
+                const addKey = content.key || content.new_key || content.id; 
+                const targetKey = addKey || c.key; 
                 
                 const newContent = { ...content };
                 delete newContent.key;
                 delete newContent.rename_to;
+                // delete newContent.name; // Keep name property for external_ports
+                delete newContent.new_name;
+                delete newContent.new_key;
+                delete newContent.id;
                 
                 if (data.external_ports[targetKey]) {
                     data.external_ports[targetKey] = deepMergeObj(data.external_ports[targetKey], newContent);
@@ -164,6 +207,21 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
             }
         }
     });
+    
+    // Auto-propagate external_ports renames to connection references
+    if (extRenames.size > 0 && data.connection) {
+        Object.values(data.connection).forEach((net: any) => {
+            if (Array.isArray(net.ports)) {
+                net.ports.forEach((p: any) => {
+                    // p is [devName, portName]. For external ports, devName is 'external' and portName is the key.
+                    if (p[0] === 'external' && extRenames.has(p[1])) {
+                        p[1] = extRenames.get(p[1]);
+                    }
+                });
+            }
+        });
+    }
+
     // Auto-propagate connection renames to ckt_netlist port_connection
     if (connRenames.size > 0 && data.ckt_netlist) {
         (data.ckt_netlist as any[]).forEach((comp: any) => {
@@ -189,24 +247,9 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
     return JSON.stringify(data, null, 2);
 };
 
-// Filter out ckt_netlist port_connection changes that are already covered by connection renames
+// Simplified to avoid aggressive filtering that might lose valid operations
 export const filterRedundantCorrections = (corrections: any[]): any[] => {
-    const renameNewNames = new Set<string>();
-    corrections.forEach(c => {
-        if (c.to === 'connection' && c.type === 'modify' && c.content) {
-            const nk = c.content.key || c.content.rename_to || c.content.name;
-            if (nk && nk !== c.key) renameNewNames.add(nk);
-        }
-    });
-    if (renameNewNames.size === 0) return corrections;
-    return corrections.filter(c => {
-        if (c.to !== 'ckt_netlist' || c.type !== 'modify' || !c.content) return true;
-        const keys = Object.keys(c.content);
-        if (keys.length !== 1 || keys[0] !== 'port_connection') return true;
-        const pc = c.content.port_connection;
-        if (!pc || typeof pc !== 'object') return true;
-        return !Object.values(pc).every(v => renameNewNames.has(v as string));
-    });
+    return corrections;
 };
 
 export const getOriginalFromBaseline = (baselineJson: string, c: any): any => {
@@ -348,135 +391,15 @@ export const pythonDataToReactState = (jsonStr: string) => {
     let edges: any[] = [];
     let mergeReport = new Set<string>();
     let extraData: any = {};
-    // Check for New Format (viz_core.py compatible)
-    // Fix: Only check for 'components' to avoid incorrectly capturing Old Format files that happen to have 'external_ports'
-    if (data.components) {
-        // ... (existing new format logic)
-        // Extract extra fields to preserve (e.g., llm_check, ckt_type, etc.)
-        const knownKeys = new Set(['components', 'external_ports', 'connections']);
-        Object.keys(data).forEach(key => {
-            if (!knownKeys.has(key)) {
-                extraData[key] = data[key];
-            }
-        });
 
-        // 1. Parse Components
-        // ... (existing parsing logic)
-        Object.entries(data.components || {}).forEach(([compName, compInfo]: [string, any]) => {
-             // Handle box: [minX, minY, maxX, maxY]
-             const [x1, y1, x2, y2] = compInfo.box;
-             const w = Math.abs(x2 - x1);
-             const h = Math.abs(y2 - y1);
-             const x = Math.min(x1, x2);
-             const y = Math.min(y1, y2);
-             
-             const compId = `comp_${compName}`; 
-             
-             nodes.push({
-                 id: compId,
-                 type: 'component',
-                 position: { x, y },
-                 width: w, height: h,
-                 data: { label: compName, type: compInfo.type || '' }
-             });
-             
-             (compInfo.ports || []).forEach((p: any) => {
-                 const pId = getId();
-                 nodes.push({
-                     id: pId,
-                     type: 'port',
-                     position: { x: p.coord[0], y: p.coord[1] },
-                     parentId: compId,
-                     data: { label: p.name, isExternal: false, compName: compName, type: p.type || "" }
-                 });
-             });
-        });
-        
-        // 2. Parse External Ports
-        Object.entries(data.external_ports || {}).forEach(([key, info]: [string, any]) => {
-             const pId = getId();
-             // Support both 'coord' and 'center' fields, default to [0,0] if missing to prevent crash
-             const coord = info.coord || info.center || [0, 0];
-             
-             // Determine Label and ExternalId
-             const label = info.name || "";
-             const externalId = key;
-
-             nodes.push({
-                 id: pId,
-                 type: 'port',
-                 position: { x: coord[0], y: coord[1] },
-                 data: { label: label, isExternal: true, compName: 'external', type: info.type || "", externalId: externalId }
-             });
-        });
-        
-        // 3. Parse Connections (Star Topology for now)
-        (data.connections || []).forEach((conn: any, index: number) => {
-            const netName = `net_${index}`;
-            const validNodes: any[] = [];
-            
-            // Find React Node IDs for each connected item
-            (conn.nodes || []).forEach((item: any) => {
-                let foundNode = null;
-                if (item.component === 'external') {
-                    // Try match externalId, fallback to label
-                    foundNode = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.externalId === item.port);
-                    if (!foundNode) {
-                        foundNode = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.label === item.port);
-                    }
-                } else {
-                    const compId = `comp_${item.component}`;
-                    foundNode = nodes.find(n => n.type === 'port' && n.parentId === compId && n.data.label === item.port);
-                }
-                
-                if (foundNode) {
-                    validNodes.push(foundNode);
-                    foundNode.data.netName = netName;
-                }
-            });
-            
-            if (validNodes.length > 1) {
-                // Calculate centroid
-                const cx = validNodes.reduce((sum, n) => sum + n.position.x, 0) / validNodes.length;
-                const cy = validNodes.reduce((sum, n) => sum + n.position.y, 0) / validNodes.length;
-                
-                const netNodeId = getId();
-                const netNode = { 
-                    id: netNodeId, 
-                    type: 'net_node', 
-                    position: { x: cx, y: cy }, 
-                    data: { netName: netName } 
-                };
-                nodes.push(netNode);
-                
-                // Create Edges (Port -> Centroid)
-                validNodes.forEach(vn => {
-                    edges.push({
-                        id: `edge_${getId()}`,
-                        source: vn.id,
-                        target: netNodeId,
-                        type: 'net_edge',
-                        data: { netName: netName }
-                    });
-                });
-            }
-        });
-        
-        return { nodes, edges, warnings: [], extraData };
-    }
-
-    // --- Fallback: Old Format (Keep existing logic) ---
-    // isOldFormat = true; // Not needed if we don't switch output format based on flag, but based on input extraData
+    // Only support Unified Netlist Format (Old Format style)
     
-    // Extract extra fields for Old Format too
+    // Extract extra fields to preserve
     Object.keys(data).forEach(key => {
         if (key !== 'ckt_netlist' && key !== 'connection') {
             extraData[key] = data[key];
         }
     });
-
-    // Mark as Old Format so we export it back in the same format
-    extraData.isOldFormat = true;
 
     // 1. Parse Components & Ports
     (data.ckt_netlist || []).forEach((comp: any) => {

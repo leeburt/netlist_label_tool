@@ -77,7 +77,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
 
     const handleCorrectionToggle = (msgIdx: number, corrIdx: number) => {
         const msg = msgs[msgIdx];
-        if (!msg.corrections || !msg.baseline) return;
+        if (!msg.corrections) return;
         const newChecked = [...(msg.correctionChecked || [])];
         newChecked[corrIdx] = !newChecked[corrIdx];
         const firstApply = !msg.correctionHistorySaved && newChecked.some(Boolean);
@@ -86,13 +86,16 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             c[msgIdx] = { ...c[msgIdx], correctionChecked: newChecked, correctionHistorySaved: firstApply || c[msgIdx].correctionHistorySaved };
             return c;
         });
-        const result = applyCorrectionItems(msg.baseline, msg.corrections, newChecked);
+        
+        // Use current netlist state as baseline to prevent rolling back user changes
+        const currentBaseline = getNetlist();
+        const result = applyCorrectionItems(currentBaseline, msg.corrections, newChecked);
         onApplyNetlist(result, !firstApply, msg.fileId);
     };
 
     const handleCorrectionToggleAll = (msgIdx: number, val: boolean) => {
         const msg = msgs[msgIdx];
-        if (!msg.corrections || !msg.baseline) return;
+        if (!msg.corrections) return;
         const newChecked = new Array(msg.corrections.length).fill(val);
         const firstApply = !msg.correctionHistorySaved && val;
         setMsgs(prev => {
@@ -100,7 +103,10 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
             c[msgIdx] = { ...c[msgIdx], correctionChecked: newChecked, correctionHistorySaved: firstApply || c[msgIdx].correctionHistorySaved };
             return c;
         });
-        const result = applyCorrectionItems(msg.baseline, msg.corrections, newChecked);
+        
+        // Use current netlist state as baseline to prevent rolling back user changes
+        const currentBaseline = getNetlist();
+        const result = applyCorrectionItems(currentBaseline, msg.corrections, newChecked);
         onApplyNetlist(result, !firstApply, msg.fileId);
     };
     
@@ -162,6 +168,10 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         setMsgs(newMsgs);
         setLoading(true);
 
+        // Update context to current state
+        const netlist = getNetlist();
+        lastNetlistRef.current = netlist;
+
         // Re-construct apiMsgs
         let sysContent = settings.systemPrompt;
         
@@ -173,12 +183,6 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         updatedMsg.hasImage = newHasImage;
         
         if (newHasNetlist) {
-            // Ensure we have netlist. If it was already there, good. If not, get it.
-            // Note: getNetlist() gets *current* state. 
-            // If we are resending an old message, the state might have changed?
-            // Usually we want the *current* state for the new request.
-            const netlist = getNetlist();
-            lastNetlistRef.current = netlist;
             sysContent += '\n\n当前网表:\n```json\n' + netlist + '\n```';
         }
 
@@ -306,10 +310,12 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         setInput('');
         setLoading(true);
 
+        // Update context to current state
+        const netlist = getNetlist();
+        lastNetlistRef.current = netlist;
+
         let sysContent = settings.systemPrompt;
         if (hasNetlist) {
-            const netlist = getNetlist();
-            lastNetlistRef.current = netlist;
             sysContent += '\n\n当前网表:\n```json\n' + netlist + '\n```';
         }
         const apiMsgs: any[] = [{ role: 'system', content: sysContent }];
@@ -442,7 +448,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         }
 
         const renderedThink = thinkContent ? (
-            <details className="mb-2 group" defaultOpen={true}>
+            <details className="mb-2 group" open>
                 <summary className="text-[10px] text-slate-400 cursor-pointer select-none list-none flex items-center gap-1 hover:text-slate-600 dark:hover:text-slate-300 transition-colors outline-none">
                      <ChevronRight size={10} className="group-open:rotate-90 transition-transform"/> 
                      <span>Thinking Process</span>

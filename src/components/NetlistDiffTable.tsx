@@ -105,11 +105,11 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll, onI
 
                             {isExpanded && (
                                 <div className="px-3 pb-2 pl-9 space-y-1 bg-slate-50/50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-800/50">
-                                    {c.reason && (
-                                        <div className="text-[10px] text-slate-400 italic mb-1 border-b border-slate-200 dark:border-slate-700/50 pb-1">
-                                            {c.reason}
-                                        </div>
-                                    )}
+                                    <div className="text-[10px] text-slate-400 font-mono mb-1 border-b border-slate-200 dark:border-slate-700/50 pb-1 flex flex-wrap gap-2">
+                                        <span>To: {c.to}</span>
+                                        <span>Type: {c.type}</span>
+                                        {c.reason && <span className="italic text-slate-500">{c.reason}</span>}
+                                    </div>
                                     {diffs.map((d: any, j: number) => (
                                         <div key={j} className="flex items-start gap-1.5 font-mono text-[10px] leading-tight">
                                             <span className="text-slate-500 dark:text-slate-400 shrink-0">{d.field}:</span>
@@ -120,6 +120,14 @@ const NetlistDiffTable = ({ items, baseline, checked, onToggle, onToggleAll, onI
                                             </div>
                                         </div>
                                     ))}
+                                    {c.content && (
+                                        <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700/30">
+                                            <div className="text-[9px] uppercase text-slate-400 mb-0.5">Raw Content:</div>
+                                            <pre className="text-[9px] font-mono bg-slate-100 dark:bg-slate-800 p-1.5 rounded overflow-x-auto text-slate-600 dark:text-slate-400 whitespace-pre-wrap break-all">
+                                                {JSON.stringify(c.content, null, 2)}
+                                            </pre>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

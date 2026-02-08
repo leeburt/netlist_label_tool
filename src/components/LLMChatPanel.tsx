@@ -4,7 +4,7 @@ import { DEFAULT_LLM_HOST, DEFAULT_LLM_MODELS, DEFAULT_LLM_SYSTEM_PROMPT, LLM_PR
 import { reactStateToPythonData, applyCorrectionItems, filterRedundantCorrections, autoDiffNetlists } from '../utils/netlistUtils';
 import NetlistDiffTable from './NetlistDiffTable';
 
-const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist, bgImage, notify, onHighlight, currentFileId }: any) => {
+const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist, bgImage, notify, onHighlight, currentFileId, captureCanvas }: any) => {
     const [settings, setSettings] = useState(() => {
         try { 
             const s = localStorage.getItem('llm_settings'); 
@@ -177,9 +177,16 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         // Check for new flags in the edited content
         const newHasNetlist = newContent.includes('@网表');
         const newHasImage = newContent.includes('@原图');
+        const newHasScreenshot = newContent.includes('@截图');
         // Update flags
         updatedMsg.hasNetlist = newHasNetlist;
         updatedMsg.hasImage = newHasImage;
+        updatedMsg.hasScreenshot = newHasScreenshot;
+        
+        // Capture screenshot if needed
+        if (newHasScreenshot && captureCanvas) {
+            updatedMsg.screenshotData = await captureCanvas();
+        }
         
         if (newHasNetlist) {
             sysContent += '\n\n当前网表:\n```json\n' + netlist + '\n```';
@@ -189,10 +196,17 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
         
         newMsgs.forEach((m: any) => {
             if (m.role === 'user') {
-                const cleanText = m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim() || m.content;
+                const cleanText = m.content.replace(/@原图/g, '').replace(/@网表/g, '').replace(/@截图/g, '').trim() || m.content;
+                const images: any[] = [];
                 if (m.hasImage && bgImage?.startsWith('data:')) {
+                    images.push({ type: 'image_url', image_url: { url: bgImage } });
+                }
+                if (m.hasScreenshot && m.screenshotData) {
+                    images.push({ type: 'image_url', image_url: { url: m.screenshotData } });
+                }
+                if (images.length > 0) {
                     apiMsgs.push({ role: 'user', content: [
-                        { type: 'image_url', image_url: { url: bgImage } },
+                        ...images,
                         { type: 'text', text: cleanText }
                     ]});
                 } else {
@@ -303,7 +317,15 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
 
         const hasNetlist = input.includes('@网表');
         const hasImage = input.includes('@原图');
-        const userMsg = { role: 'user', content: input, ts: Date.now(), hasNetlist, hasImage, fileId: contextFileId };
+        const hasScreenshot = input.includes('@截图');
+        
+        // Capture screenshot if needed (before setting loading)
+        let screenshotData: string | null = null;
+        if (hasScreenshot && captureCanvas) {
+            screenshotData = await captureCanvas();
+        }
+        
+        const userMsg = { role: 'user', content: input, ts: Date.now(), hasNetlist, hasImage, hasScreenshot, screenshotData, fileId: contextFileId };
         const newMsgs = [...msgs, userMsg];
         setMsgs(newMsgs);
         setInput('');
@@ -321,10 +343,17 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
 
         newMsgs.forEach((m: any) => {
             if (m.role === 'user') {
-                const cleanText = m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim() || m.content;
+                const cleanText = m.content.replace(/@原图/g, '').replace(/@网表/g, '').replace(/@截图/g, '').trim() || m.content;
+                const images: any[] = [];
                 if (m.hasImage && bgImage?.startsWith('data:')) {
+                    images.push({ type: 'image_url', image_url: { url: bgImage } });
+                }
+                if (m.hasScreenshot && m.screenshotData) {
+                    images.push({ type: 'image_url', image_url: { url: m.screenshotData } });
+                }
+                if (images.length > 0) {
                     apiMsgs.push({ role: 'user', content: [
-                        { type: 'image_url', image_url: { url: bgImage } },
+                        ...images,
                         { type: 'text', text: cleanText }
                     ]});
                 } else {
@@ -573,7 +602,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                         <textarea className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 dark:text-slate-200 outline-none focus:border-violet-500 mt-0.5 h-20 resize-none transition-all" value={settings.systemPrompt} onChange={e => setSettings((s: any) => ({ ...s, systemPrompt: e.target.value }))}/>
                     </div>
                     <div className="text-[10px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 rounded px-2 py-1.5 flex justify-between items-center">
-                        <span>💡 在消息中输入 <code className="text-violet-500 font-bold">@网表</code> 附带数据</span>
+                        <span>💡 <code className="text-violet-500 font-bold">@网表</code> <code className="text-blue-500 font-bold">@原图</code> <code className="text-emerald-500 font-bold">@截图</code></span>
                         <button onClick={() => {
                             if (window.confirm('Reset settings to defaults?')) {
                                 setSettings({
@@ -612,7 +641,7 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                             <Bot size={32} className="text-violet-300 dark:text-violet-700"/>
                         </div>
                         <p className="text-xs font-medium">输入问题开始对话</p>
-                        <p className="text-[10px] text-slate-300 dark:text-slate-600">用 @网表 @原图 引用当前数据</p>
+                        <p className="text-[10px] text-slate-300 dark:text-slate-600">用 @网表 @原图 @截图 引用当前数据</p>
                     </div>
                 )}
                 {msgs.map((m: any, i: number) => (
@@ -652,7 +681,18 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                                         </div>
                                         {m.hasNetlist && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">📋 网表</span>}
                                         {m.hasImage && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">🖼️ 原图</span>}
-                                        {m.content.replace(/@原图/g, '').replace(/@网表/g, '').trim()}
+                                        {m.hasScreenshot && <span className="inline-block bg-white/20 rounded px-1 py-0.5 text-[10px] mr-1 mb-1">📸 截图</span>}
+                                        <div>{m.content.replace(/@原图/g, '').replace(/@网表/g, '').replace(/@截图/g, '').trim()}</div>
+                                        {(m.hasImage || m.hasScreenshot) && (
+                                            <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                                                {m.hasImage && bgImage && (
+                                                    <img src={bgImage} className="h-16 rounded border border-white/30 cursor-pointer hover:opacity-80 transition-opacity" title="原图 (点击查看大图)" onClick={() => { const w = window.open('', '_blank'); if (w) { w.document.write(`<html><head><title>原图</title><style>body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#111}</style></head><body><img src="${bgImage}" style="max-width:100%;max-height:100vh;object-fit:contain"/></body></html>`); w.document.close(); }}} alt="原图"/>
+                                                )}
+                                                {m.hasScreenshot && m.screenshotData && (
+                                                    <img src={m.screenshotData} className="h-16 rounded border border-white/30 cursor-pointer hover:opacity-80 transition-opacity" title="截图 (点击查看大图)" onClick={() => { const w = window.open('', '_blank'); if (w) { w.document.write(`<html><head><title>截图</title><style>body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#111}</style></head><body><img src="${m.screenshotData}" style="max-width:100%;max-height:100vh;object-fit:contain"/></body></html>`); w.document.close(); }}} alt="截图"/>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 )
                             ) : (
@@ -683,11 +723,15 @@ const LLMChatPanel = ({ isOpen, onClose, nodes, edges, extraData, onApplyNetlist
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all ${input.includes('@原图') ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-blue-500 hover:border-blue-300'}`}>
                         🖼️ @原图
                     </button>
+                    <button onClick={() => setInput(prev => prev.includes('@截图') ? prev : '@截图 ' + prev)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all ${input.includes('@截图') ? 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-300 dark:border-emerald-700 text-emerald-600 dark:text-emerald-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-emerald-500 hover:border-emerald-300'}`}>
+                        📸 @截图
+                    </button>
                 </div>
                 <div className="flex gap-2 items-end">
                     <textarea
                         className="flex-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm text-slate-800 dark:text-slate-200 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 resize-none placeholder-slate-400 dark:placeholder-slate-600 transition-all min-h-[80px]"
-                        rows={3} placeholder="输入问题... @网表 引用网表 @原图 引用电路图&#10;Enter 发送，Shift+Enter 换行" value={input}
+                        rows={3} placeholder="输入问题... @网表 @原图 @截图&#10;Enter 发送，Shift+Enter 换行" value={input}
                         onChange={e => { setInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'; }}
                         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                     />

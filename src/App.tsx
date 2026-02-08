@@ -7,6 +7,7 @@ import {
   Sparkles, Maximize, GripHorizontal
 } from 'lucide-react';
 
+import { toPng } from 'html-to-image';
 import { getId } from './utils/commonUtils';
 import { DEFAULT_TYPES, DEFAULT_PORT_NAMES, DEFAULT_PORT_TYPES } from './utils/constants';
 import { stringToColor, getComponentColor, getComponentStrokeColor } from './utils/colorUtils';
@@ -589,6 +590,16 @@ export default function App() {
       };
       img.src = bgImage;
   }, [bgImage]);
+
+  const captureCanvas = useCallback(async (): Promise<string | null> => {
+      if (!containerRef.current) return null;
+      try {
+          return await toPng(containerRef.current, { cacheBust: true, skipAutoScale: true });
+      } catch (e) {
+          console.error('captureCanvas failed', e);
+          return null;
+      }
+  }, []);
 
   const loadFile = (index: number, sourceList = fileList, overrideJson?: string) => {
     if (index < 0 || index >= sourceList.length) return;
@@ -1818,7 +1829,7 @@ export default function App() {
                     <div style={{ transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.k})`, transformOrigin: '0 0', position: 'absolute', top: 0, left: 0 }}>
                         {bgImage && <img src={bgImage} style={{ maxWidth: 'none', maxHeight: 'none' }} className="pointer-events-none opacity-90 select-none shadow-lg block" draggable={false} alt="" />}
                         
-                        <svg className="absolute top-0 left-0 overflow-visible pointer-events-none" style={{width:1,height:1,zIndex:10}}>
+                        <svg className="absolute top-0 left-0 overflow-visible pointer-events-none" style={{width:'100%',height:'100%',zIndex:10}}>
                             {edges.map(e => <ConnectionSegment key={e.id} from={nodes.find(n=>n.id===e.source)?.position} to={nodes.find(n=>n.id===e.target)?.position} netName={e.data?.netName} isSelected={selectedIds.has(e.id)} isRelated={highlightedNetNames.has(e.data?.netName) && !selectedIds.has(e.id)} isConflict={conflicts.has(e.id)} width={appSettings.defaultLineWidth} />)}
                             {connectStartId && dragState?.type==='CONNECTING' && <ConnectionSegment from={nodes.find(n=>n.id===connectStartId)?.position} to={{x:dragState.currX,y:dragState.currY}} isTemp width={appSettings.defaultLineWidth} />}
                         </svg>
@@ -1952,6 +1963,7 @@ export default function App() {
                 notify={setNotification}
                 onHighlight={(ids: any) => setSelectedIds(new Set(ids))}
                 currentFileId={fileList[currentFileIndex]?.id}
+                captureCanvas={captureCanvas}
             />
         </div>
     </div>

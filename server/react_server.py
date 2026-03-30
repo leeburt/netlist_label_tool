@@ -9,9 +9,10 @@ import shutil
 import hashlib
 import time
 import sqlite3
+import mimetypes
 from pathlib import Path
-from typing import Dict, Any, List
-from fastapi.responses import Response, FileResponse
+from typing import Dict, Any, List, Optional
+from fastapi.responses import Response, FileResponse, JSONResponse
 
 app = FastAPI()
 
@@ -33,6 +34,60 @@ dist_dir = project_root / "dist"
 cache_dir = project_root / ".cache"
 tasks_dir = cache_dir / "tasks" 
 tasks_dir.mkdir(parents=True, exist_ok=True)
+
+# --- Server workspace (read/write files under a single root on the machine hosting this API) ---
+WORKSPACE_ROOT: Optional[Path] = None
+
+
+def _init_workspace_root() -> None:
+    global WORKSPACE_ROOT
+    raw = os.getenv("NETLIST_WORKSPACE_ROOT", "").strip()
+    if not raw:
+        WORKSPACE_ROOT = None
+        return
+    p = Path(raw).expanduser().resolve()
+    if not p.is_dir():
+        print(f"[workspace] NETLIST_WORKSPACE_ROOT is not a directory: {raw}")
+        WORKSPACE_ROOT = None
+        return
+    WORKSPACE_ROOT = p
+    print(f"[workspace] enabled: {WORKSPACE_ROOT}")
+
+
+_init_workspace_root()
+
+
+def _workspace_resolved_root() -> Path:
+    return WORKSPACE_ROOT.resolve() if WORKSPACE_ROOT else Path()
+
+
+def _workspace_safe_path(rel: str) -> Optional[Path]:
+    """
+    Resolve rel (posix-style, relative to workspace root) to an absolute path.
+    Rejects traversal and absolute paths.
+    """
+    if WORKSPACE_ROOT is None:
+        return None
+    root = _workspace_resolved_root()
+    rel = (rel or "").replace("\\", "/").strip()
+    if rel.startswith("/") or ".." in rel.split("/"):
+        return None
+    for part in rel.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        if "\x00" in part:
+            return None
+    if rel == "" or rel == ".":
+        return root
+    full = (root / rel).resolve()
+    try:
+        full.relative_to(root)
+    except ValueError:
+        return None
+    return full
+
 
 # Database Setup
 DB_PATH = project_root / "annotations.db"
@@ -63,6 +118,75 @@ class TaskUpload(BaseModel):
     json_data: Dict[str, Any]
     image_data: str # Base64
     filename: str = "result.json"
+
+
+class WorkspaceSaveBody(BaseModel):
+    path: str
+    content: str
+
+
+@app.get("/api/workspace/status")
+def workspace_status():
+    return {
+        "enabled": WORKSPACE_ROOT is not None,
+    }
+
+
+@app.get("/api/workspace/list")
+def workspace_list(path: str = ""):
+    if WORKSPACE_ROOT is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Workspace not configured", "enabled": False, "entries": []},
+        )
+    base = _workspace_safe_path(path)
+    if base is None:
+        return {"path": path, "entries": [], "error": "Invalid path"}
+    if not base.is_dir():
+        return {"path": path, "entries": [], "error": "Not a directory"}
+    entries: List[Dict[str, str]] = []
+    try:
+        for child in sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if child.name.startswith("."):
+                continue
+            entries.append(
+                {
+                    "name": child.name,
+                    "kind": "directory" if child.is_dir() else "file",
+                }
+            )
+    except OSError as e:
+        return {"path": path, "entries": [], "error": str(e)}
+    rel_out = path.replace("\\", "/").strip("/") if path else ""
+    return {"path": rel_out, "entries": entries, "enabled": True}
+
+
+@app.get("/api/workspace/file")
+def workspace_read_file(path: str):
+    if WORKSPACE_ROOT is None:
+        return JSONResponse(status_code=503, content={"error": "Workspace not configured"})
+    full = _workspace_safe_path(path)
+    if full is None or not full.is_file():
+        return JSONResponse(status_code=404, content={"error": "File not found"})
+    media_type, _ = mimetypes.guess_type(str(full))
+    return FileResponse(full, media_type=media_type or "application/octet-stream")
+
+
+@app.post("/api/workspace/save")
+async def workspace_save(body: WorkspaceSaveBody):
+    if WORKSPACE_ROOT is None:
+        return {"success": False, "error": "Workspace not configured"}
+    rel = body.path.replace("\\", "/").strip()
+    full = _workspace_safe_path(rel)
+    if full is None:
+        return {"success": False, "error": "Invalid path"}
+    try:
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(body.content, encoding="utf-8")
+    except OSError as e:
+        return {"success": False, "error": str(e)}
+    return {"success": True}
+
 
 # --- Heartbeat Mechanism ---
 heartbeats: Dict[str, float] = {}

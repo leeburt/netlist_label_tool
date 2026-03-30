@@ -20,6 +20,8 @@ import ModalDialog from './components/ModalDialog';
 import ConnectionSegment from './components/ConnectionSegment';
 import RightSidebar from './components/RightSidebar';
 import LLMChatPanel from './components/LLMChatPanel';
+import ServerWorkspaceModal from './components/ServerWorkspaceModal';
+import { imageRelPathToJsonRelPath } from './utils/workspaceUtils';
 
 const MODE = { VIEW: 'VIEW', ADD_COMP: 'ADD_COMP', ADD_PORT: 'ADD_PORT', CONNECT: 'CONNECT' };
 
@@ -72,6 +74,8 @@ export default function App() {
   const [projectDirHandle, setProjectDirHandle] = useState<any>(null);
   const [currentFileIndex, setCurrentFileIndex] = useState(-1);
   const [searchQuery, setSearchQuery] = useState('');
+  const [serverWorkspaceEnabled, setServerWorkspaceEnabled] = useState(false);
+  const [serverPickerOpen, setServerPickerOpen] = useState(false);
   
   const [transform, setTransform] = useState({ x: 0, y: 0, k: 1 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -216,6 +220,13 @@ export default function App() {
             setNotification("Failed to load task data");
         });
     }
+  }, []);
+
+  useEffect(() => {
+      fetch('/api/workspace/status')
+          .then((r) => (r.ok ? r.json() : { enabled: false }))
+          .then((d) => setServerWorkspaceEnabled(!!d.enabled))
+          .catch(() => setServerWorkspaceEnabled(false));
   }, []);
 
   const handleSaveToServer = async () => {
@@ -564,6 +575,16 @@ export default function App() {
     });
   };
 
+  const handleAddServerFiles = (newFiles: any[]) => {
+      setFileList((prev) => {
+          const next = [...prev, ...newFiles];
+          if (currentFileIndex === -1 && next.length > 0) {
+              setTimeout(() => loadFile(0, next), 50);
+          }
+          return next;
+      });
+  };
+
   const saveCurrentStateToMemory = useCallback(() => {
     if (currentFileIndex !== -1 && fileList[currentFileIndex]) {
         setFileList(prev => {
@@ -637,6 +658,7 @@ export default function App() {
     } else if (fileObj.data) {
         setNodes(fileObj.data.nodes);
         setEdges(fileObj.data.edges);
+        if (fileObj.serverExtraData != null) setExtraTaskData(fileObj.serverExtraData);
         setPast([]); setFuture([]);
     } else if (fileObj.jsonFile) {
         const jReader = new FileReader();
@@ -1362,67 +1384,197 @@ export default function App() {
   };
 
   const downloadCurrentJson = async () => {
-      const dataStr = reactStateToPythonData(nodes, edges, extraTaskData);
-      
-      const currentFile = fileList[currentFileIndex];
-      let handle = currentFile?.jsonHandle;
+      if (fileList.length === 0) {
+          setNotification("没有可保存的文件");
+          return;
+      }
 
-      // Lazy creation logic: If no handle but we have a project directory, try to create one
-      if (!handle && projectDirHandle && currentFile) {
+      // 将当前画布上的修改合并进列表，避免只保存当前 tab、其它已切换过的文件仍停留在旧 data
+      const mergedList = fileList.map((f, i) =>
+          i === currentFileIndex && currentFileIndex !== -1
+              ? {
+                    ...f,
+                    data: { nodes, edges },
+                    status: nodes.length > 0 ? 'annotated' : 'new'
+                }
+              : f
+      );
+
+      const indicesToSave = mergedList
+          .map((f, i) => ({ f, i }))
+          .filter(({ f }) => f.data != null);
+
+      if (indicesToSave.length === 0) {
+          setNotification("没有已加载到内存的网表可保存（请先打开图片并标注，或切换文件以写入缓存）");
+          return;
+      }
+
+      setFileList(mergedList);
+      const listAfterHandles = mergedList.map((f) => ({ ...f }));
+
+      const tryLazyJsonHandle = async (idx: number, dir: any) => {
+          const fileEntry = listAfterHandles[idx];
+          if (fileEntry.jsonHandle) return fileEntry.jsonHandle;
+          if (!dir) return null;
           try {
-              const baseName = currentFile.name.substring(0, currentFile.name.lastIndexOf('.'));
+              const baseName = fileEntry.name.substring(0, fileEntry.name.lastIndexOf('.'));
               const jsonName = `${baseName}.json`;
-              
-              // Create file handle
-              // @ts-ignore
-              handle = await projectDirHandle.getFileHandle(jsonName, { create: true });
-              
-              // Update fileList state to store this new handle for future saves
-              setFileList(prev => {
-                  const copy = [...prev];
-                  // Use finding by ID or Index to be safe, though index should be stable here
-                  if (copy[currentFileIndex]) {
-                      copy[currentFileIndex] = {
-                          ...copy[currentFileIndex],
-                          jsonHandle: handle,
-                          status: 'annotated'
-                      };
-                  }
-                  return copy;
-              });
-              
+              // @ts-ignore - File System Access API
+              const handle = await dir.getFileHandle(jsonName, { create: true });
+              listAfterHandles[idx] = { ...fileEntry, jsonHandle: handle, status: 'annotated' };
+              return handle;
           } catch (e) {
               console.error("Failed to auto-create JSON file:", e);
+              return null;
           }
-      }
+      };
 
-      if (handle) {
+      const triggerDownload = (dataStr: string, imageName: string) => {
+          const blob = new Blob([dataStr], { type: 'application/json' });
+          const a = document.createElement('a');
+          const url = URL.createObjectURL(blob);
+          a.href = url;
+          a.download = (imageName.replace(/\.[^/.]+$/, '') || 'circuit') + '.json';
+          a.click();
+          URL.revokeObjectURL(url);
+      };
+
+      // 避免每次保存都走 <a download> 触发「另存为」：优先用可写目录或 Save File 句柄，之后覆盖写入无弹窗
+      let dirForWrite: any = projectDirHandle;
+      const anyMissingJsonHandle = indicesToSave.some(
+          ({ f, i }) => !f.serverImageRelPath && !listAfterHandles[i].jsonHandle
+      );
+      if (anyMissingJsonHandle && !dirForWrite && typeof (window as any).showDirectoryPicker === 'function') {
           try {
               // @ts-ignore - File System Access API
-              const writable = await handle.createWritable();
-              await writable.write(dataStr);
-              await writable.close();
-              setNotification("Saved to file successfully (Overwritten)!");
-              return;
-          } catch (e) {
-              console.error("Failed to save to handle:", e);
-              // Fallback to download if write fails
-              setNotification("Failed to overwrite file (Check permissions). Downloading instead.");
+              dirForWrite = await window.showDirectoryPicker({ mode: 'readwrite' });
+              setProjectDirHandle(dirForWrite);
+          } catch (e: any) {
+              if (e?.name === 'AbortError') {
+                  setNotification('已取消保存');
+                  return;
+              }
+              console.error(e);
           }
-      } else {
-        // Explicit notification if we are in download mode when the user might expect overwrite
-        if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-             setNotification("Note: Remote HTTP connections cannot overwrite local files. Downloading instead.");
-        } else {
-             setNotification("File saved (Downloaded)");
-        }
       }
 
-      const blob = new Blob([dataStr], {type:'application/json'});
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = (fileList[currentFileIndex]?.name.replace(/\.[^/.]+$/, "") || "circuit") + ".json";
-      a.click();
+      let written = 0;
+      let downloaded = 0;
+      let handleFailures = 0;
+      let serverSaveFailed = 0;
+      const remoteHttpNote =
+          window.location.protocol === 'http:' &&
+          window.location.hostname !== 'localhost' &&
+          window.location.hostname !== '127.0.0.1';
+
+      for (let s = 0; s < indicesToSave.length; s++) {
+          const { f, i: idx } = indicesToSave[s];
+          const { nodes: n, edges: e } = f.data;
+          const dataStr = reactStateToPythonData(n, e, extraTaskData);
+
+          if (f.serverImageRelPath) {
+              const jsonRel = f.serverJsonRelPath || imageRelPathToJsonRelPath(f.serverImageRelPath);
+              try {
+                  const res = await fetch('/api/workspace/save', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ path: jsonRel, content: dataStr }),
+                  });
+                  const body = await res.json().catch(() => ({}));
+                  if (res.ok && body.success) {
+                      written++;
+                      listAfterHandles[idx] = {
+                          ...listAfterHandles[idx],
+                          serverJsonRelPath: jsonRel,
+                          status: n.length > 0 ? 'annotated' : 'new',
+                      };
+                  } else {
+                      serverSaveFailed++;
+                      if (downloaded > 0) await new Promise((r) => setTimeout(r, 200));
+                      triggerDownload(dataStr, f.name);
+                      downloaded++;
+                  }
+              } catch (err) {
+                  console.error(err);
+                  serverSaveFailed++;
+                  if (downloaded > 0) await new Promise((r) => setTimeout(r, 200));
+                  triggerDownload(dataStr, f.name);
+                  downloaded++;
+              }
+              continue;
+          }
+
+          let handle = listAfterHandles[idx].jsonHandle || (await tryLazyJsonHandle(idx, dirForWrite));
+
+          if (!handle && typeof (window as any).showSaveFilePicker === 'function') {
+              try {
+                  const baseName = f.name.substring(0, f.name.lastIndexOf('.'));
+                  const jsonName = `${baseName}.json`;
+                  // @ts-ignore - File System Access API
+                  handle = await window.showSaveFilePicker({
+                      suggestedName: jsonName,
+                      types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+                  });
+                  listAfterHandles[idx] = {
+                      ...listAfterHandles[idx],
+                      jsonHandle: handle,
+                      status: 'annotated',
+                  };
+              } catch (e: any) {
+                  if (e?.name === 'AbortError') {
+                      setNotification('已取消保存');
+                      setFileList(listAfterHandles);
+                      return;
+                  }
+                  console.error(e);
+              }
+          }
+
+          if (handle) {
+              try {
+                  // @ts-ignore - File System Access API
+                  const writable = await handle.createWritable();
+                  await writable.write(dataStr);
+                  await writable.close();
+                  written++;
+              } catch (err) {
+                  console.error('Failed to save to handle:', err);
+                  handleFailures++;
+                  if (downloaded > 0) await new Promise((r) => setTimeout(r, 200));
+                  triggerDownload(dataStr, f.name);
+                  downloaded++;
+              }
+          } else {
+              if (downloaded > 0) await new Promise((r) => setTimeout(r, 200));
+              triggerDownload(dataStr, f.name);
+              downloaded++;
+          }
+      }
+
+      setFileList(listAfterHandles);
+
+      if (indicesToSave.length === 1) {
+          if (written === 1 && downloaded === 0) {
+              setNotification('已保存（本地文件或服务器，覆盖写入）');
+          } else if (serverSaveFailed > 0 && downloaded >= 1) {
+              setNotification('服务器保存失败，已改为下载 JSON');
+          } else if (downloaded === 1 && handleFailures === 0) {
+              setNotification(
+                  remoteHttpNote
+                      ? '注意：非 localhost 的 HTTP 无法写回本地文件，已改为下载 JSON。'
+                      : '文件已保存（下载）'
+              );
+          } else {
+              setNotification('写入失败，已改为下载 JSON。');
+          }
+      } else {
+          const parts: string[] = [];
+          if (written) parts.push(`已写入 ${written} 个`);
+          if (downloaded) parts.push(`下载 ${downloaded} 个`);
+          if (handleFailures) parts.push(`本地句柄写入失败 ${handleFailures} 个（已尝试下载）`);
+          if (serverSaveFailed) parts.push(`服务器写入失败 ${serverSaveFailed} 个（已尝试下载）`);
+          setNotification(`批量保存：${parts.join('，')}${remoteHttpNote && downloaded ? '（远程 HTTP 仅能下载）' : ''}`);
+      }
   };
 
   const filteredFiles = fileList.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -1457,6 +1609,12 @@ export default function App() {
         {notification && <Notification message={notification} onClose={() => setNotification(null)} />}
         <ModalDialog isOpen={dialog.isOpen} type={dialog.type} data={dialog.data} options={dialog.options} initialName={dialog.initialName} initialType={dialog.initialType} position={dialog.position} onConfirm={dialog.onConfirm || handleDialogConfirm} onCancel={dialog.onCancel || (() => setDialog({ isOpen: false }))} />
         <SettingsDialog isOpen={showSettings} onClose={() => setShowSettings(false)} appSettings={appSettings} setAppSettings={setAppSettings} theme={theme} setTheme={setTheme} />
+        <ServerWorkspaceModal
+            open={serverPickerOpen}
+            onClose={() => setServerPickerOpen(false)}
+            onAdd={handleAddServerFiles}
+            notify={setNotification}
+        />
         
         {/* Hover Tooltip - Optimized with Ref */}
         <div ref={tooltipRef} className={`fixed z-[100] pointer-events-none bg-slate-900/90 backdrop-blur text-white text-xs p-2 rounded border border-slate-700 shadow-xl ${!hoveredNode || dragState || dialog.isOpen ? 'hidden' : ''}`}
@@ -1529,6 +1687,15 @@ export default function App() {
                                 <FolderOpen size={14}/> Open Folder
                             </button>
                         </div>
+                        {serverWorkspaceEnabled && (
+                            <button
+                                type="button"
+                                onClick={() => setServerPickerOpen(true)}
+                                className="w-full bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-emerald-800 dark:text-emerald-200 py-1.5 rounded border border-emerald-200 dark:border-emerald-800 flex items-center justify-center gap-2 text-xs font-medium transition-colors"
+                            >
+                                服务器工作区
+                            </button>
+                        )}
                         <input ref={fileInputRef} type="file" multiple accept="image/*,.json" className="hidden" onChange={handleFileUpload} />
                         <div className="relative">
                             <Search size={12} className="absolute left-2.5 top-2 text-slate-400 dark:text-slate-500"/>
@@ -1546,7 +1713,7 @@ export default function App() {
                                         <div key={f.id} onClick={() => { saveCurrentStateToMemory(); loadFile(realIdx); }} 
                                             className={`flex items-center px-3 py-2 cursor-pointer border-l-2 transition-all ${isActive ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 text-blue-700 dark:text-white' : 'border-transparent text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'}`}>
                                             <CheckCircle2 size={10} className={`mr-2 ${f.status === 'annotated' || f.data ? 'text-green-500' : 'text-slate-300 dark:text-slate-700'}`}/>
-                                            <span className="text-xs truncate font-medium">{f.name}</span>
+                                            <span className="text-xs truncate font-medium" title={f.serverImageRelPath ? `服务器: ${f.serverImageRelPath}` : f.name}>{f.name}</span>
                                         </div>
                                     );
                                 })}

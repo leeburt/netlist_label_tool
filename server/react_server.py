@@ -379,13 +379,18 @@ else:
 if __name__ == "__main__":
     import uvicorn
     # Using 12301
-    
-    use_https = os.getenv("NETLIST_LABEL_TOOL_HTTPS", "").strip().lower() in {"1", "true", "yes", "y"}
 
-    # Check for SSL certificates
+    # Check for SSL certificates first
     key_file = current_dir / "key.pem"
     cert_file = current_dir / "cert.pem"
     has_certs = key_file.exists() and cert_file.exists()
+
+    # Auto-enable HTTPS if certs exist, unless explicitly disabled
+    env_https = os.getenv("NETLIST_LABEL_TOOL_HTTPS", "").strip().lower()
+    if env_https in {"0", "false", "no", "n"}:
+        use_https = False
+    else:
+        use_https = has_certs or (env_https in {"1", "true", "yes", "y"})
 
     if use_https and has_certs:
         print("Starting in HTTPS mode... (NETLIST_LABEL_TOOL_HTTPS=1)")

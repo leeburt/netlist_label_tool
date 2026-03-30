@@ -27,6 +27,7 @@ const MODE = { VIEW: 'VIEW', ADD_COMP: 'ADD_COMP', ADD_PORT: 'ADD_PORT', CONNECT
 
 export default function App() {
   // --- Editor State (Moved up for dependencies) ---
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
   const [nodes, setNodes] = useState<any[]>([]);
   const [edges, setEdges] = useState<any[]>([]);
   const [bgImage, setBgImage] = useState(null);
@@ -905,49 +906,6 @@ export default function App() {
     setNodes(newNodes); setEdges(newEdges); setSelectedIds(new Set());
   }, [selectedIds, nodes, edges, saveHistory, getConnectedEdges]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: any) => {
-        if (dialog.isOpen || showSettings) return; 
-        const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
-        if (activeTag === 'input' || activeTag === 'textarea') return;
-
-        const key = e.key.toLowerCase();
-
-        // Tool Selection Shortcuts
-        if (key === 's') { setMode(MODE.VIEW); setSelectedIds(new Set()); cancelConnect(); }
-        else if (key === 'r') { setMode(MODE.ADD_COMP); setSelectedIds(new Set()); cancelConnect(); }
-        else if (key === 'e') { setMode(MODE.ADD_PORT); setSelectedIds(new Set()); cancelConnect(); }
-        else if (key === 'w') { setMode(MODE.CONNECT); setSelectedIds(new Set()); cancelConnect(); }
-
-        // Navigation
-        else if (key === 'a') switchFile(-1);
-        else if (key === 'd') switchFile(1);
-
-        // Edit Actions
-        else if (key === 'u') { 
-            e.preventDefault(); 
-            if (taskId) handleSaveToServer(); 
-            else downloadCurrentJson(); 
-        }
-        else if (e.ctrlKey && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
-        else if (e.ctrlKey && key === 'y') { e.preventDefault(); redo(); }
-        else if ((e.key === 'Delete' || e.key === 'Backspace') && e.shiftKey) { e.preventDefault(); handleRemoveFile(); }
-        else if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelected(e.ctrlKey); }
-        else if (e.key === 'Escape') { 
-            if (connectStartId) cancelConnect();
-            else if (mode !== MODE.VIEW) setMode(MODE.VIEW); // Esc: Back to View
-            else setSelectedIds(new Set());
-        }
-        
-        // Toggles
-        else if (key === 'p') { setShowPorts(prev => !prev); }
-        else if (key === 'l') { setShowLabels(prev => !prev); }
-        else if (key === 'h') { setHideAll(prev => !prev); }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, dialog.isOpen, showSettings, connectStartId, currentFileIndex, fileList, nodes, edges, deleteSelected, mode, taskId, extraTaskData]);
-
   const screenToWorld = useCallback((sx: number, sy: number) => {
     if (!containerRef.current) return { x: 0, y: 0 };
     const rect = containerRef.current.getBoundingClientRect();
@@ -1487,6 +1445,7 @@ export default function App() {
                           ...listAfterHandles[idx],
                           serverJsonRelPath: jsonRel,
                           status: n.length > 0 ? 'annotated' : 'new',
+                          data: { nodes: n, edges: e },
                       };
                   } else {
                       serverSaveFailed++;
@@ -1604,6 +1563,46 @@ export default function App() {
       position: { x: 0, y: 0 }
   } : null);
 
+  // Keyboard shortcuts handler
+  useEffect(() => {
+    const handleKeyDown = (e: any) => {
+        if (dialog.isOpen || showSettings) return;
+        const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+        if (activeTag === 'input' || activeTag === 'textarea') return;
+
+        const key = e.key.toLowerCase();
+
+        // Save - directly click the button to use exact same logic
+        if ((e.ctrlKey && key === 's') || (!e.ctrlKey && key === 'u')) {
+            e.preventDefault();
+            saveButtonRef.current?.click();
+            return;
+        }
+
+        // All other shortcuts
+        if (e.ctrlKey && key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+        else if (e.ctrlKey && key === 'y') { e.preventDefault(); redo(); }
+        else if ((e.key === 'Delete' || e.key === 'Backspace') && e.shiftKey) { e.preventDefault(); handleRemoveFile(); }
+        else if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelected(e.ctrlKey); }
+        else if (e.key === 'Escape') {
+            if (connectStartId) cancelConnect();
+            else if (mode !== MODE.VIEW) setMode(MODE.VIEW); // Esc: Back to View
+            else setSelectedIds(new Set());
+        }
+        else if (!e.ctrlKey && key === 's') { setMode(MODE.VIEW); setSelectedIds(new Set()); cancelConnect(); }
+        else if (!e.ctrlKey && key === 'r') { setMode(MODE.ADD_COMP); setSelectedIds(new Set()); cancelConnect(); }
+        else if (!e.ctrlKey && key === 'e') { setMode(MODE.ADD_PORT); setSelectedIds(new Set()); cancelConnect(); }
+        else if (!e.ctrlKey && key === 'w') { setMode(MODE.CONNECT); setSelectedIds(new Set()); cancelConnect(); }
+        else if (!e.ctrlKey && key === 'a') switchFile(-1);
+        else if (!e.ctrlKey && key === 'd') switchFile(1);
+        else if (!e.ctrlKey && key === 'p') { setShowPorts(prev => !prev); }
+        else if (!e.ctrlKey && key === 'l') { setShowLabels(prev => !prev); }
+        else if (!e.ctrlKey && key === 'h') { setHideAll(prev => !prev); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, dialog.isOpen, showSettings, connectStartId, mode, setMode, setSelectedIds, cancelConnect, switchFile, deleteSelected, handleRemoveFile, setShowPorts, setShowLabels, setHideAll]);
+
   return (
     <div className="flex flex-col h-screen bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200 font-sans overflow-hidden transition-colors duration-200">
         {notification && <Notification message={notification} onClose={() => setNotification(null)} />}
@@ -1661,7 +1660,7 @@ export default function App() {
                     <span>Settings</span>
                 </button>
 
-                <button onClick={taskId ? handleSaveToServer : downloadCurrentJson} disabled={currentFileIndex===-1 && !taskId} className={`${taskId ? 'bg-orange-600 hover:bg-orange-500 shadow-orange-900/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'} text-white px-4 py-2 rounded-md text-sm font-bold flex items-center gap-2 transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed`}>
+                <button ref={saveButtonRef} onClick={taskId ? handleSaveToServer : downloadCurrentJson} disabled={currentFileIndex===-1 && !taskId} className={`${taskId ? 'bg-orange-600 hover:bg-orange-500 shadow-orange-900/20' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-900/20'} text-white px-4 py-2 rounded-md text-sm font-bold flex items-center gap-2 transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed`}>
                     <Save size={16}/> {taskId ? "SAVE & RETURN ( U )" : "SAVE JSON ( U )"}
                 </button>
             </div>

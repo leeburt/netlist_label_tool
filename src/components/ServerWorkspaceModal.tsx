@@ -112,7 +112,8 @@ export default function ServerWorkspaceModal({
     const newFiles: ServerWorkspaceNewFile[] = [];
     try {
       for (const rel of rels) {
-        const imgRes = await fetch(`/api/workspace/file?path=${encodeURIComponent(rel)}`);
+        const cacheBuster = `t=${Date.now()}`;
+        const imgRes = await fetch(`/api/workspace/file?path=${encodeURIComponent(rel)}&${cacheBuster}`);
         if (!imgRes.ok) {
           notify(`读取失败: ${rel}`);
           continue;
@@ -126,7 +127,7 @@ export default function ServerWorkspaceModal({
         let serverExtraData: any = undefined;
         let status: 'annotated' | 'new' = 'new';
         try {
-          const jr = await fetch(`/api/workspace/file?path=${encodeURIComponent(jsonRel)}`);
+          const jr = await fetch(`/api/workspace/file?path=${encodeURIComponent(jsonRel)}&${cacheBuster}`);
           if (jr.ok) {
             const txt = await jr.text();
             const parsed = pythonDataToReactState(txt);

@@ -627,35 +627,16 @@ export default function App() {
     if (index < 0 || index >= sourceList.length) return;
     const fileObj = sourceList[index];
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        if (!e.target) return;
-        setBgImage(e.target.result as any);
-        if (overrideJson) {
-            const res = pythonDataToReactState(overrideJson);
-            if (res) {
-                setNodes(res.nodes);
-                setEdges(res.edges);
-                if (res.extraData) setExtraTaskData(res.extraData);
-                setPast([]); setFuture([]);
-                setNotification("✨ AI 已自动更新网表 (已切换文件)");
-            }
-        } else if (!fileObj.data) {
-            const img = new Image();
-            img.onload = () => {
-                if (containerRef.current) {
-                    const rect = containerRef.current.getBoundingClientRect();
-                    const k = Math.min((rect.width - 40) / img.width, (rect.height - 40) / img.height, 1);
-                    setTransform({ x: Math.floor((rect.width - img.width * k) / 2), y: Math.floor((rect.height - img.height * k) / 2), k });
-                }
-            };
-            img.src = e.target.result as string;
-        }
-    };
-    reader.readAsDataURL(fileObj.imgFile);
-
+    // 先设置 nodes/edges，避免等待图片加载
     if (overrideJson) {
-        // Handled in reader.onload
+        const res = pythonDataToReactState(overrideJson);
+        if (res) {
+            setNodes(res.nodes);
+            setEdges(res.edges);
+            if (res.extraData) setExtraTaskData(res.extraData);
+            setPast([]); setFuture([]);
+            setNotification("✨ AI 已自动更新网表 (已切换文件)");
+        }
     } else if (fileObj.data) {
         setNodes(fileObj.data.nodes);
         setEdges(fileObj.data.edges);
@@ -682,7 +663,74 @@ export default function App() {
         setEdges([]);
         setPast([]); setFuture([]);
     }
-    
+
+    // 加载图片
+    const loadImageAndSetBg = async () => {
+        try {
+            if (fileObj.serverImageRelPath && !fileObj.imgFile) {
+                // 服务器图片懒加载
+                const cacheBuster = `t=${Date.now()}`;
+                const imgRes = await fetch(`/api/workspace/file?path=${encodeURIComponent(fileObj.serverImageRelPath)}&${cacheBuster}`);
+                if (!imgRes.ok) {
+                    setNotification(`加载图片失败: ${fileObj.name}`);
+                    return;
+                }
+                const blob = await imgRes.blob();
+                const imgFile = new File([blob], fileObj.name, { type: blob.type || 'image/png' });
+
+                // 更新 fileList 缓存已加载的图片
+                setFileList(prev => {
+                    const copy = [...prev];
+                    copy[index] = { ...copy[index], imgFile };
+                    return copy;
+                });
+
+                // 读取为 DataURL
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    if (!e.target) return;
+                    setBgImage(e.target.result as any);
+                    if (!fileObj.data) {
+                        const img = new Image();
+                        img.onload = () => {
+                            if (containerRef.current) {
+                                const rect = containerRef.current.getBoundingClientRect();
+                                const k = Math.min((rect.width - 40) / img.width, (rect.height - 40) / img.height, 1);
+                                setTransform({ x: Math.floor((rect.width - img.width * k) / 2), y: Math.floor((rect.height - img.height * k) / 2), k });
+                            }
+                        };
+                        img.src = e.target.result as string;
+                    }
+                };
+                reader.readAsDataURL(imgFile);
+            } else if (fileObj.imgFile) {
+                // 本地文件或已缓存的服务器文件
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    if (!e.target) return;
+                    setBgImage(e.target.result as any);
+                    if (!fileObj.data) {
+                        const img = new Image();
+                        img.onload = () => {
+                            if (containerRef.current) {
+                                const rect = containerRef.current.getBoundingClientRect();
+                                const k = Math.min((rect.width - 40) / img.width, (rect.height - 40) / img.height, 1);
+                                setTransform({ x: Math.floor((rect.width - img.width * k) / 2), y: Math.floor((rect.height - img.height * k) / 2), k });
+                            }
+                        };
+                        img.src = e.target.result as string;
+                    }
+                };
+                reader.readAsDataURL(fileObj.imgFile);
+            }
+        } catch (e) {
+            console.error('加载图片失败', e);
+            setNotification(`加载图片失败: ${fileObj.name}`);
+        }
+    };
+
+    loadImageAndSetBg();
+
     setCurrentFileIndex(index);
     setSelectedIds(new Set());
     setConnectStartId(null);
@@ -1708,8 +1756,17 @@ export default function App() {
                                 {filteredFiles.map((f) => {
                                     const realIdx = fileList.findIndex(x => x.id === f.id);
                                     const isActive = realIdx === currentFileIndex;
+                                    const handleContextMenu = (e: React.MouseEvent) => {
+                                        e.preventDefault();
+                                        navigator.clipboard.writeText(f.name).then(() => {
+                                            setNotification(`复制文件名成功：${f.name}`);
+                                        }).catch(() => {
+                                            setNotification(`复制文件名失败：${f.name}`);
+                                        });
+                                    };
                                     return (
-                                        <div key={f.id} onClick={() => { saveCurrentStateToMemory(); loadFile(realIdx); }} 
+                                        <div key={f.id} onClick={() => { saveCurrentStateToMemory(); loadFile(realIdx); }}
+                                            onContextMenu={handleContextMenu}
                                             className={`flex items-center px-3 py-2 cursor-pointer border-l-2 transition-all ${isActive ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 text-blue-700 dark:text-white' : 'border-transparent text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'}`}>
                                             <CheckCircle2 size={10} className={`mr-2 ${f.status === 'annotated' || f.data ? 'text-green-500' : 'text-slate-300 dark:text-slate-700'}`}/>
                                             <span className="text-xs truncate font-medium" title={f.serverImageRelPath ? `服务器: ${f.serverImageRelPath}` : f.name}>{f.name}</span>
@@ -2039,7 +2096,20 @@ export default function App() {
                                 );
                             } else {
                                 const isNet = n.type === 'net_node';
-                                const bg = isConflict ? '#ef4444' : (isNet ? '#22c55e' : (n.data.isExternal ? '#f97316' : '#a855f7'));
+                                let bg: string;
+                                if (isConflict) {
+                                    bg = '#ef4444';
+                                } else if (isNet) {
+                                    bg = '#22c55e';
+                                } else if (n.data.isExternal && (n.data.label || n.data.type)) {
+                                    // 外部端口根据 label（优先）或 type 使用不同颜色
+                                    const colorKey = n.data.label || n.data.type;
+                                    bg = getComponentStrokeColor(colorKey);
+                                } else if (n.data.isExternal) {
+                                    bg = '#f97316';
+                                } else {
+                                    bg = '#a855f7';
+                                }
                                 
                                 return (
                                     <div key={n.id} className={`absolute rounded-full border border-white shadow-sm z-20 flex items-center justify-center transition-transform ${sel ? 'scale-150 ring-2 ring-blue-500' : ''} ${isConflict ? 'animate-pulse ring-2 ring-red-500' : ''}`}

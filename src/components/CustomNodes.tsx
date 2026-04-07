@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { Handle, Position, NodeProps, NodeResizer } from 'reactflow';
+import { getComponentStrokeColor } from '../utils/colorUtils';
 
 // --- Styles based on Python main.py ---
 
@@ -42,8 +43,19 @@ export const ComponentNode = memo(({ data, selected }: NodeProps) => {
 export const PortNode = memo(({ data, selected }: NodeProps) => {
     const isExt = data.isExternal;
     const size = isExt ? 20 : 10;
-    
-    const bgColor = selected ? 'yellow' : (isExt ? 'orange' : 'purple');
+
+    let bgColor: string;
+    if (selected) {
+        bgColor = '#FFD700'; // yellow
+    } else if (isExt && (data.label || data.type)) {
+        // 外部端口根据 label（优先）或 type 使用不同颜色
+        const colorKey = data.label || data.type;
+        bgColor = getComponentStrokeColor(colorKey);
+    } else if (isExt) {
+        bgColor = '#f97316'; // orange
+    } else {
+        bgColor = '#a855f7'; // purple
+    }
     const borderColor = selected ? 'black' : 'white';
     const borderWidth = selected ? 2 : 1;
 

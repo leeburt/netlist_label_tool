@@ -110,23 +110,24 @@ export default function ServerWorkspaceModal({
   const ingestPaths = async (rels: string[]) => {
     setLoading(true);
     const newFiles: ServerWorkspaceNewFile[] = [];
-    try {
-      for (const rel of rels) {
-        const cacheBuster = `t=${Date.now()}`;
-        const imgRes = await fetch(`/api/workspace/file?path=${encodeURIComponent(rel)}&${cacheBuster}`);
-        if (!imgRes.ok) {
-          notify(`读取失败: ${rel}`);
-          continue;
-        }
-        const blob = await imgRes.blob();
-        const baseName = rel.split('/').pop() || 'image.png';
-        const imgFile = new File([blob], baseName, { type: blob.type || 'image/png' });
+    const failedFiles: string[] = [];
+    const concurrency = 10; // JSON 并发可以更高
+    let completed = 0;
+    const total = rels.length;
 
+    try {
+      // 只加载 JSON，不预下载图片（图片懒加载）
+      const loadSingleFile = async (rel: string): Promise<ServerWorkspaceNewFile | null> => {
+        const cacheBuster = `t=${Date.now()}`;
+        const baseName = rel.split('/').pop() || 'image.png';
         const jsonRel = imageRelPathToJsonRelPath(rel);
+
         let data: { nodes: any[]; edges: any[] } | null = null;
         let serverExtraData: any = undefined;
         let status: 'annotated' | 'new' = 'new';
+
         try {
+          // 只尝试加载 JSON，图片在真正需要时才加载
           const jr = await fetch(`/api/workspace/file?path=${encodeURIComponent(jsonRel)}&${cacheBuster}`);
           if (jr.ok) {
             const txt = await jr.text();
@@ -141,22 +142,44 @@ export default function ServerWorkspaceModal({
           /* 无同名 JSON 时忽略 */
         }
 
-        newFiles.push({
+        completed++;
+        if (total > 10) {
+          notify(`加载中... ${completed}/${total} (${Math.round(completed / total * 100)}%)`);
+        }
+
+        return {
           id: getId(),
           name: baseName,
-          imgFile,
+          imgFile: undefined as any, // 占位，不实际加载图片
           source: 'server',
           serverImageRelPath: rel,
           serverJsonRelPath: jsonRel,
           data,
           serverExtraData,
           status,
-        });
+        };
+      };
+
+      // 使用并发池控制
+      const results: ServerWorkspaceNewFile[] = [];
+      for (let i = 0; i < rels.length; i += concurrency) {
+        const batch = rels.slice(i, i + concurrency);
+        const batchResults = await Promise.all(batch.map(loadSingleFile));
+        results.push(...batchResults.filter((r): r is ServerWorkspaceNewFile => r !== null));
       }
+
+      newFiles.push(...results);
+
       if (newFiles.length > 0) {
         onAdd(newFiles);
-        notify(`已从服务器工作区添加 ${newFiles.length} 个文件`);
+        let msg = `已从服务器工作区添加 ${newFiles.length} 个文件`;
+        if (failedFiles.length > 0) {
+          msg += ` (${failedFiles.length} 个文件加载失败)`;
+        }
+        notify(msg);
         onClose();
+      } else if (failedFiles.length > 0) {
+        notify(`所有文件加载失败 (${failedFiles.length} 个)`);
       }
     } finally {
       setLoading(false);

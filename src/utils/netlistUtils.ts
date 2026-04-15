@@ -1,5 +1,5 @@
 import { deepMergeObj, getId, safeJsonParse } from './commonUtils';
-import { SNAPPING_THRESHOLD } from './constants';
+import { SNAPPING_THRESHOLD_PORT, SNAPPING_THRESHOLD_NET_NODE } from './constants';
 
 export const mergeConnectionData = (existing: any, incoming: any) => {
     const merged = deepMergeObj(existing, incoming);
@@ -31,12 +31,12 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
     const findKey = (obj: any, key: string) => {
         if (!obj) return null;
         if (obj[key]) return key;
-        
+
         const normalized = key.trim().toLowerCase();
         // Prepare variations: with #, without #
         const normalizedHash = normalized.startsWith('#') ? normalized : '#' + normalized;
         const normalizedNoHash = normalized.startsWith('#') ? normalized.substring(1) : normalized;
-        
+
         return Object.keys(obj).find(k => {
             const kn = k.trim().toLowerCase();
             return kn === normalized || kn === normalizedHash || kn === normalizedNoHash;
@@ -60,7 +60,7 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
             if (c.type === 'modify') {
                 // ckt_netlist is array, find by id using robust match
                 const idx = (data.ckt_netlist || []).findIndex((item: any) => isIdMatch(item.id, c.key));
-                
+
                 if (idx >= 0) {
                     const comp = data.ckt_netlist[idx];
                     // Sync port_connection changes to connection map to ensure graph consistency
@@ -82,7 +82,7 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                                 const newNetKey = newNet as string;
                                 if (!data.connection[newNetKey]) data.connection[newNetKey] = { ports: [], pixels: [] };
                                 if (!data.connection[newNetKey].ports) data.connection[newNetKey].ports = [];
-                                
+
                                 const exists = data.connection[newNetKey].ports.some((p: any) => p[0] === compName && p[1] === portName);
                                 if (!exists) data.connection[newNetKey].ports.push([compName, portName]);
                             }
@@ -98,12 +98,12 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
         } else if (c.to === 'connection') {
             data.connection = data.connection || {};
             const realKey = findKey(data.connection, c.key);
-            
+
             if (c.type === 'modify' && realKey) {
                 const merged = deepMergeObj(data.connection[realKey], c.content || {});
                 // Check multiple possible rename fields
                 const newKey = merged.key || merged.rename_to || merged.name || merged.new_name || merged.new_key;
-                
+
                 if (newKey && newKey !== realKey) {
                     // Clean up special properties from the merged object
                     delete merged.key;
@@ -111,17 +111,17 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                     delete merged.name;
                     delete merged.new_name;
                     delete merged.new_key;
-                    
+
                     // Remove old key
                     delete data.connection[realKey];
-                    
+
                     // Assign to new key (merge if exists)
                     if (data.connection[newKey]) {
                         data.connection[newKey] = mergeConnectionData(data.connection[newKey], merged);
                     } else {
                         data.connection[newKey] = merged;
                     }
-                    
+
                     // Record rename for ckt_netlist propagation using REAL key
                     connRenames.set(realKey, newKey);
                 } else {
@@ -137,7 +137,7 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                 const content = c.content || {};
                 const addKey = content.key || content.rename_to || content.name || content.new_name || content.new_key;
                 const targetKey = addKey || c.key;
-                
+
                 // If renaming during add (rare but possible in some diffs)
                 const newContent = { ...content };
                 delete newContent.key;
@@ -159,16 +159,16 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
             if (c.type === 'modify' && realKey) {
                 const merged = deepMergeObj(data.external_ports[realKey], c.content || {});
                 const newKey = merged.key || merged.rename_to || merged.new_key;
-                
+
                 if (newKey && newKey !== realKey) {
                     delete merged.key;
                     delete merged.rename_to;
                     // delete merged.name; // Keep name property for external_ports
                     delete merged.new_name;
                     delete merged.new_key;
-                    
+
                     delete data.external_ports[realKey];
-                    
+
                     if (data.external_ports[newKey]) {
                          data.external_ports[newKey] = deepMergeObj(data.external_ports[newKey], merged);
                     } else {
@@ -188,9 +188,9 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                 const content = c.content || {};
                 // External Ports: Key is ID. Name is a property.
                 // Do NOT use content.name as key.
-                const addKey = content.key || content.new_key || content.id; 
-                const targetKey = addKey || c.key; 
-                
+                const addKey = content.key || content.new_key || content.id;
+                const targetKey = addKey || c.key;
+
                 const newContent = { ...content };
                 delete newContent.key;
                 delete newContent.rename_to;
@@ -198,7 +198,7 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
                 delete newContent.new_name;
                 delete newContent.new_key;
                 delete newContent.id;
-                
+
                 if (data.external_ports[targetKey]) {
                     data.external_ports[targetKey] = deepMergeObj(data.external_ports[targetKey], newContent);
                 } else {
@@ -207,7 +207,7 @@ export const applyCorrectionItems = (baselineJson: string, items: any[], checked
             }
         }
     });
-    
+
     // Auto-propagate external_ports renames to connection references
     if (extRenames.size > 0 && data.connection) {
         Object.values(data.connection).forEach((net: any) => {
@@ -363,7 +363,7 @@ export const autoDiffNetlists = (baselineJson: string, newJson: string): any[] |
             const delPorts = JSON.stringify(baseConns[delKey]?.ports);
             let matched = false;
             for (let ai = 0; ai < addedConns.length; ai++) {
-                const addKey = addedConns[ai];
+                const addKey = addedPorts[ai];
                 const addPorts = JSON.stringify(nextConns[addKey]?.ports);
                 if (delPorts === addPorts) {
                     corrections.push({ to: 'connection', key: delKey, type: 'modify', reason: '网络重命名', content: { rename_to: addKey } });
@@ -393,7 +393,7 @@ export const pythonDataToReactState = (jsonStr: string) => {
     let extraData: any = {};
 
     // Only support Unified Netlist Format (Old Format style)
-    
+
     // Extract extra fields to preserve
     Object.keys(data).forEach(key => {
         if (key !== 'ckt_netlist' && key !== 'connection') {
@@ -408,7 +408,7 @@ export const pythonDataToReactState = (jsonStr: string) => {
         const y = top_left[1];
         const w = bottom_right[0] - top_left[0];
         const h = bottom_right[1] - top_left[1];
-        let compId = comp.device_name || comp.id; 
+        let compId = comp.device_name || comp.id;
         if (nodes.some(n => n.id === compId)) {
              compId = `${compId}_${getId()}`;
         }
@@ -418,10 +418,10 @@ export const pythonDataToReactState = (jsonStr: string) => {
             type: 'component',
             position: { x, y },
             width: w, height: h,
-            data: { 
-                label: (typeof comp.name === 'string' && comp.name) ? comp.name : (comp.device_name || ''), 
-                type: typeof comp.component_type === 'string' ? comp.component_type : '', 
-                rawId: comp.id 
+            data: {
+                label: (typeof comp.name === 'string' && comp.name) ? comp.name : (comp.device_name || ''),
+                type: typeof comp.component_type === 'string' ? comp.component_type : '',
+                rawId: comp.id
             }
         });
 
@@ -437,10 +437,10 @@ export const pythonDataToReactState = (jsonStr: string) => {
                 type: 'port',
                 position: { x: center[0], y: center[1] },
                 parentId: compId,
-                data: { 
-                    label: portName, 
-                    type: portInfo.type || "", 
-                    isExternal: false, 
+                data: {
+                    label: portName,
+                    type: portInfo.type || "",
+                    isExternal: false,
                     compName: comp.device_name,
                     netName: connectedNet
                 }
@@ -453,7 +453,7 @@ export const pythonDataToReactState = (jsonStr: string) => {
          const center = info.center || info.coord;
          if (!center) return;
          const pId = getId();
-         
+
          const label = info.name || "";
          const externalId = key;
 
@@ -466,7 +466,7 @@ export const pythonDataToReactState = (jsonStr: string) => {
     });
 
     // 2. Parse Connections with Auto-Merge Logic
-    const netRenames = new Map(); 
+    const netRenames = new Map();
 
     const getEffectiveNetName = (name: string) => {
         let curr = name;
@@ -478,26 +478,33 @@ export const pythonDataToReactState = (jsonStr: string) => {
 
     Object.entries(data.connection || {}).forEach(([rawNetName, netInfo]: [string, any]) => {
         let hasSegments = false;
-        
+
         (netInfo.pixels || []).forEach((seg: any) => {
             hasSegments = true;
             const [p1, p2] = seg;
             let currentNetName = getEffectiveNetName(rawNetName);
 
-            // Find best existing node to snap to (Priority: Same Net > Unassigned > None)
+            // Find best existing node to snap to
+            // - For port: use SNAPPING_THRESHOLD_PORT (3 pixels)
+            // - For net_node: use SNAPPING_THRESHOLD_NET_NODE (8 pixels)
             const findSnapNode = (x: number, y: number) => {
-                 const candidates = nodes.filter(n => 
-                    (n.type === 'port' || n.type === 'net_node') && 
-                    Math.abs(n.position.x - x) <= SNAPPING_THRESHOLD && 
-                    Math.abs(n.position.y - y) <= SNAPPING_THRESHOLD
-                 );
+                 const candidates = nodes.filter(n => {
+                    if (n.type === 'port') {
+                        return Math.abs(n.position.x - x) <= SNAPPING_THRESHOLD_PORT &&
+                               Math.abs(n.position.y - y) <= SNAPPING_THRESHOLD_PORT;
+                    } else if (n.type === 'net_node') {
+                        return Math.abs(n.position.x - x) <= SNAPPING_THRESHOLD_NET_NODE &&
+                               Math.abs(n.position.y - y) <= SNAPPING_THRESHOLD_NET_NODE;
+                    }
+                    return false;
+                 });
                  // 1. Try to find node already on this net
                  let match = candidates.find(n => n.data.netName === currentNetName);
                  if (match) return match;
                  // 2. Try to find unassigned node (e.g. port)
                  match = candidates.find(n => !n.data.netName);
                  if (match) return match;
-                 
+
                  // 3. Do not snap to nodes of other nets (avoids auto-merge)
                  return null;
             };
@@ -530,7 +537,7 @@ export const pythonDataToReactState = (jsonStr: string) => {
         if (!hasSegments && (netInfo.ports || []).length > 1) {
             let currentNetName = getEffectiveNetName(rawNetName);
             const validPortNodes: any[] = [];
-            
+
             // Find port nodes
             netInfo.ports.forEach((nodeInfo: any) => {
                 const [devName, portName] = nodeInfo;
@@ -543,7 +550,7 @@ export const pythonDataToReactState = (jsonStr: string) => {
                         validPortNodes.push(portNode);
                         if (!portNode.data.netName) portNode.data.netName = currentNetName;
                     }
-                } else if (devName === portName || devName === 'external') { 
+                } else if (devName === portName || devName === 'external') {
                     // Try external port match
                     // Match by externalId or label
                     let extPort = nodes.find(n => n.type === 'port' && n.data.isExternal && n.data.externalId === portName);
@@ -561,13 +568,13 @@ export const pythonDataToReactState = (jsonStr: string) => {
                 // Calculate Centroid
                 const cx = validPortNodes.reduce((sum, n) => sum + n.position.x, 0) / validPortNodes.length;
                 const cy = validPortNodes.reduce((sum, n) => sum + n.position.y, 0) / validPortNodes.length;
-                
+
                 const jId = getId();
-                nodes.push({ 
-                    id: jId, 
-                    type: 'net_node', 
-                    position: { x: cx, y: cy }, 
-                    data: { netName: currentNetName } 
+                nodes.push({
+                    id: jId,
+                    type: 'net_node',
+                    position: { x: cx, y: cy },
+                    data: { netName: currentNetName }
                 });
 
                 validPortNodes.forEach(pn => {
@@ -595,7 +602,7 @@ export const pythonDataToReactState = (jsonStr: string) => {
 
 export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: any = {}) => {
     // --- Always Export to Unified Netlist Format ---
-    
+
     const output: any = {
         ckt_netlist: [],
         ckt_type: "ckt",
@@ -604,7 +611,7 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
         llm_check: [],
         ...extraData
     };
-    
+
     // Remove internal flags
     delete output.isOldFormat;
     delete output.components; // Ensure old keys are removed if present in extraData
@@ -612,7 +619,7 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
 
     const ckt_netlist: any[] = [];
     const external_ports: any = {};
-    
+
     // Helper: Get absolute position
     const getAbsPos = (node: any) => {
         if (node.parentNode) {
@@ -631,16 +638,16 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
         const y1 = Math.round(n.position.y);
         const x2 = Math.round(n.position.x + n.width);
         const y2 = Math.round(n.position.y + n.height);
-        
+
         const ports: any = {};
         const port_connection: any = {};
-        
+
         nodes.filter(p => p.parentId === n.id).forEach(p => {
             const portName = p.data.label;
             const abs = getAbsPos(p);
             const absX = Math.round(abs.x);
             const absY = Math.round(abs.y);
-            
+
             // Ports in Old Format: "portName": { "top_left": ..., "bottom_right": ..., "center": [x, y] }
             const pR = 5;
             ports[portName] = {
@@ -649,14 +656,14 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
                 top_left: [absX - pR, absY - pR],
                 bottom_right: [absX + pR, absY + pR]
             };
-            
+
             if (p.data.netName) {
                 port_connection[portName] = p.data.netName;
             }
         });
-        
+
         ckt_netlist.push({
-            id: n.data.rawId || "#0", 
+            id: n.data.rawId || "#0",
             device_name: compName,
             component_type: n.data.type || "",
             bbox: { top_left: [x1, y1], bottom_right: [x2, y2] },
@@ -666,7 +673,7 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
             attribute: []
         });
     });
-    
+
     // 1b. External Ports
     let extIdCounter = 0;
     nodes.filter(n => n.type === 'port' && n.data.isExternal).forEach(n => {
@@ -674,15 +681,15 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
         const absX = Math.round(n.position.x);
         const absY = Math.round(n.position.y);
         const pR = 5;
-        
+
         let exId = n.data.externalId;
         if (!exId) {
             exId = `${++extIdCounter}`;
         }
-        
+
         // Ensure format "#ID"
         const finalKey = exId.startsWith('#') ? exId : `#${exId}`;
-        
+
         external_ports[finalKey] = {
             name: portName,
             type: n.data.type || "",
@@ -694,16 +701,16 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
 
     // 2. Connections
     const netMap: any = {}; // netName -> { ports: [], pixels: [] }
-    
+
     // 2a. Collect Ports
     nodes.forEach(n => {
         if (n.type === 'port' && n.data.netName) {
             const net = n.data.netName;
             if (!netMap[net]) netMap[net] = { ports: [], pixels: [] };
-            
+
             let devName = "unknown";
             let portIdentifier = n.data.label;
-            
+
             if (n.parentId) {
                 const parent = nodes.find(p => p.id === n.parentId);
                 if (parent) devName = parent.data.label;
@@ -711,28 +718,28 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
                 devName = "external";
                 portIdentifier = n.data.externalId || n.data.label;
             }
-            
+
             if (devName !== "unknown") {
                 const exists = netMap[net].ports.some((p: any) => p[0] === devName && p[1] === portIdentifier);
                 if (!exists) netMap[net].ports.push([devName, portIdentifier]);
             }
         }
     });
-    
+
     // 2b. Collect Pixels (Edges)
     edges.forEach(e => {
         const srcNode = nodes.find(n => n.id === e.source);
         const tgtNode = nodes.find(n => n.id === e.target);
-        
+
         if (srcNode && tgtNode) {
             let net = e.data?.netName || srcNode.data.netName || tgtNode.data.netName;
-            
+
             if (net) {
                 if (!netMap[net]) netMap[net] = { ports: [], pixels: [] };
-                
+
                 const p1 = getAbsPos(srcNode);
                 const p2 = getAbsPos(tgtNode);
-                
+
                 netMap[net].pixels.push([
                     [Math.round(p1.x), Math.round(p1.y)],
                     [Math.round(p2.x), Math.round(p2.y)]
@@ -740,11 +747,11 @@ export const reactStateToPythonData = (nodes: any[], edges: any[], extraData: an
             }
         }
     });
-    
+
     output.ckt_netlist = ckt_netlist;
     output.external_ports = external_ports;
     output.connection = netMap;
     if (!output.ckt_type) output.ckt_type = "ckt";
-    
+
     return JSON.stringify(output, null, 2);
 };

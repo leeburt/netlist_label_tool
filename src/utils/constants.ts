@@ -4,7 +4,8 @@ export const DEFAULT_TYPES = ['NMOS', 'PMOS', 'RES', 'CAP', 'IND', 'VSOURCE', 'I
 export const DEFAULT_PORT_NAMES = ['G', 'D', 'S', 'B', 'IN', 'OUT', 'VCC', 'VSS', 'PLUS', 'MINUS', 'A', 'B', 'Y'];
 export const DEFAULT_PORT_TYPES = ['port', 'gnd', 'vdd'];
 
-export const SNAPPING_THRESHOLD = 8; 
+export const SNAPPING_THRESHOLD_PORT = 3;
+export const SNAPPING_THRESHOLD_NET_NODE = 8;
 
 export const DEFAULT_LLM_HOST = 'https://a.fe8.cn/v1';
 
